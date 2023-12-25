@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+
+metadata:
+  labels:
+    my.domain/sampleLabel1: "label-data-1"
+    my.domain/sampleLabel2: "label-data-2"
+    my.domain/sampleLabel3: "label-data-3"
+    
+  name: {{ app-name }}-{{ configmap-name }}
+
+data:
+  admin.enabled: "true"
+  application.instanceLabelKey: app.kubernetes.io/instance
+  application.resourceTrackingMethod: label
+  configManagementPlugins: ""
+  ga.anonymizeusers: "false"
+  ga.trackingid: ""
+  help.chatText: ""
+  help.chatUrl: ""
+  kustomize.buildOptions: ""
+  oidc.config: ""
+  repositories: ""
+  repository.credentials: ""
+  resource.exclusions: |
+    - apiGroups:
+      - tekton.dev
+      clusters:
+      - '*'
+      kinds:
+      - TaskRun
+      - PipelineRun
+  resource.inclusions: ""
+  statusbadge.enabled: "false"
+  users.anonymous.enabled: "false"
