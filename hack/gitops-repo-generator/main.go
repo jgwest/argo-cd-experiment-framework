@@ -31,22 +31,83 @@ func main() {
 
 	templateDir := filepath.Join(workingDir, "template")
 
-	fmt.Println("hi")
+	outdir, err := os.MkdirTemp(os.TempDir(), "repo")
+	if err != nil {
+		fatallog.Fatal(err)
+	}
 
 	// small
 
 	smallInput := repoGenInput{
+		name:             "small",
 		numberOfApps:     3,
 		replicasPerApp:   1,
 		configMapsPerApp: 2,
 		servicesPerApp:   1,
 	}
 
-	generateRepoNew(smallInput, templateDir, "/tmp")
+	mediumInput := repoGenInput{
+		name:             "medium",
+		numberOfApps:     10,
+		replicasPerApp:   1,
+		configMapsPerApp: 3,
+		servicesPerApp:   3,
+	}
+
+	largeInput := repoGenInput{
+		name:             "large",
+		numberOfApps:     20,
+		replicasPerApp:   3,
+		configMapsPerApp: 4,
+		servicesPerApp:   4,
+	}
+
+	inputs := []repoGenInput{
+		smallInput,
+		mediumInput,
+		largeInput,
+	}
+
+	for _, input := range inputs {
+
+		outDir := filepath.Join(outdir, input.name)
+
+		fmt.Println(outDir)
+
+		if err := os.MkdirAll(outDir, 0700); err != nil {
+			fatallog.Fatal(err)
+		}
+
+		if err := generateRepoNew(input, templateDir, outDir); err != nil {
+			fatallog.Fatal(err)
+		}
+
+	}
+
+	// Generate versions of each with replicas=0
+	for _, input := range inputs {
+
+		input.replicasPerApp = 0
+
+		outDir := filepath.Join(outdir, input.name+"-no-replicas")
+
+		fmt.Println(outDir)
+
+		if err := os.MkdirAll(outDir, 0700); err != nil {
+			fatallog.Fatal(err)
+		}
+
+		if err := generateRepoNew(input, templateDir, outDir); err != nil {
+			fatallog.Fatal(err)
+		}
+
+	}
 
 }
 
 type repoGenInput struct {
+	name string
+
 	numberOfApps int
 
 	replicasPerApp   int

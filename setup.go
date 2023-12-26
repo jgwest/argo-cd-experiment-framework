@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 // Code in this file from redhat-appstudio/managed-gitops repo
 
 const (
+	ArgoCDNamespace                           = "argocd"
 	ArgoCDManagerServiceAccountPrefix         = "argocd-manager-"
 	ArgoCDManagerClusterRoleNamePrefix        = "argocd-manager-cluster-role-"
 	ArgoCDManagerClusterRoleBindingNamePrefix = "argocd-manager-cluster-role-binding-"
@@ -46,21 +48,121 @@ var (
 	}
 )
 
-func initialConfiguration(ctx context.Context, c *myClient, kLog logr.Logger) error {
+func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient) error {
 
-	if err := setupOpenShiftGitOps(ctx, c, kLog); err != nil {
+	actionOutput("Deleting and recreating Argo CD namespace")
+	namespace := corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ArgoCDNamespace,
+		},
+	}
+	if err := deleteAndCreateResource(ctx, &namespace, c); err != nil {
 		return err
 	}
 
-	if err := createClusterSecret(ctx, "argocd", c.kClient, kLog); err != nil {
+	actionOutput("Creating Argo CD CRDs")
+
+	execFolder, err := os.Getwd()
+	if err != nil {
 		return err
 	}
 
-	actionOutput("Create Application to enable cluster watch")
+	// execPath, err := os.Executable()
+	// if err != nil {
+	// 	return err
+	// }
+	// execFolder := filepath.Dir(execPath)
+
+	stdout, stderr, err := runCommand("kubectl", "apply", "-k", "https://github.com/argoproj/argo-cd/manifests/crds?ref=v2.9.3")
+	if err != nil {
+		fmt.Println(stdout, stderr)
+		return err
+	}
+
+	actionOutput("Generating Argo CD manifests")
+
+	namespaceInstallYamlPath := filepath.Join(execFolder, "manifests", "argo", "namespace-install.yaml")
+
+	if applicationControllerSettingsParam != nil {
+
+		var newFileContents string
+		bytes, err := os.ReadFile(namespaceInstallYamlPath)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(bytes), "\n") {
+
+			if applicationControllerSettingsParam.resourceRequirements != nil {
+				rReq := applicationControllerSettingsParam.resourceRequirements
+				line = strings.ReplaceAll(line, "{{ argocd-application-controller-cpu-limit }}", rReq.Limits.Cpu().String())
+				line = strings.ReplaceAll(line, "{{ argocd-application-controller-memory-limit }}", rReq.Limits.Memory().String())
+				line = strings.ReplaceAll(line, "{{ argocd-application-controller-cpu-request }}", rReq.Requests.Cpu().String())
+				line = strings.ReplaceAll(line, "{{ argocd-application-controller-memory-request }}", rReq.Requests.Memory().String())
+			}
+
+			if strings.HasPrefix(line, "  controller.status.processors") {
+
+				newFileContents += fmt.Sprintf("  controller.status.processors: \"%d\"\n", applicationControllerSettingsParam.statusProcessors)
+
+			} else if strings.HasPrefix(line, "  controller.operation.processors") {
+
+				newFileContents += fmt.Sprintf("  controller.operation.processors: \"%d\"\n", applicationControllerSettingsParam.operationProcessors)
+
+			} else if strings.HasPrefix(line, "  controller.kubectl.parallelism.limit") {
+
+				newFileContents += fmt.Sprintf("  controller.kubectl.parallelism.limit: \"%d\"\n", applicationControllerSettingsParam.kubectlParallelismLimit)
+			} else {
+				newFileContents += line + "\n"
+			}
+
+		}
+
+		file, err := os.CreateTemp(os.TempDir(), "namespaced-install")
+		if err != nil {
+			return err
+		}
+
+		if err := os.WriteFile(file.Name(), []byte(newFileContents), 0600); err != nil {
+			return err
+		}
+
+		namespaceInstallYamlPath = file.Name()
+
+	}
+
+	actionOutput("Applying Argo CD manifests")
+
+	stdout, stderr, err = runCommand("kubectl", "apply", "-n", ArgoCDNamespace, "-f", namespaceInstallYamlPath)
+	if err != nil {
+		fmt.Println(stdout, stderr)
+		return err
+	}
+
+	actionOutput("Waiting for Argo CD containers to start")
+
+	return waitForPodsToBeReady(ctx, namespace.Name, 6, c)
+
+}
+
+func initialConfiguration(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient, kLog logr.Logger) error {
+
+	if err := setupKustomizeArgoCD(ctx, applicationControllerSettingsParam, c); err != nil {
+		return err
+	}
+
+	// if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c, kLog); err != nil {
+	// 	return err
+	// }
+
+	if err := createClusterSecret(ctx, ArgoCDNamespace, c.kClient, kLog); err != nil {
+		return err
+	}
+
+	actionOutput("Create Simple Application to enable Argo CD to watch the cluster")
 	app := appv1.Application{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "enable-cluster-watch",
-			Namespace:  "argocd",
+			Namespace:  ArgoCDNamespace,
 			Finalizers: []string{
 				// "finalizer.argocd.argoproj.io/background",
 				// "resources-finalizer.argocd.argoproj.io",
@@ -68,21 +170,25 @@ func initialConfiguration(ctx context.Context, c *myClient, kLog logr.Logger) er
 		},
 		Spec: appv1.ApplicationSpec{
 			Source: &appv1.ApplicationSource{
-				RepoURL:        "https://github.com/managed-gitops-test-data/deployment-permutations-a",
-				Path:           "pathC",
-				TargetRevision: "branchB",
+				RepoURL: "https://github.com/jgwest/repo-template",
+				Path:    "apps/single/",
+
+				// RepoURL:        "https://github.com/managed-gitops-test-data/deployment-permutations-a",
+				// Path:           "pathC",
+				// TargetRevision: "branchB",
+
 			},
 			Destination: appv1.ApplicationDestination{
 				Name:      "argo-cd-secret",
-				Namespace: "argocd",
+				Namespace: ArgoCDNamespace,
 			},
 			Project: "default",
 			SyncPolicy: &appv1.SyncPolicy{
-				// Automated: &appv1.SyncPolicyAutomated{
-				// 	Prune:      true,
-				// 	SelfHeal:   true,
-				// 	AllowEmpty: false,
-				// },
+				Automated: &appv1.SyncPolicyAutomated{
+					Prune:      true,
+					SelfHeal:   true,
+					AllowEmpty: false,
+				},
 				Retry: &appv1.RetryStrategy{
 					Limit: 10000,
 				},
@@ -92,27 +198,20 @@ func initialConfiguration(ctx context.Context, c *myClient, kLog logr.Logger) er
 			},
 		},
 	}
-	// fmt.Println(app)
 
 	if err := c.kClient.Create(ctx, &app); err != nil {
 		return err
 	}
 
 	actionOutput("Wait for Application to be healthy, to enable cluster watch")
-	for {
-		if err := c.kClient.Get(ctx, client.ObjectKeyFromObject(&app), &app); err != nil {
-			return err
-		}
-
-		if app.Status.Health.Status == health.HealthStatusHealthy {
-			break
-		}
-
-		time.Sleep(1000 * time.Millisecond)
+	expectedSyncStatus := appv1.SyncStatusCodeSynced
+	expectedHealth := health.HealthStatusHealthy
+	if err := waitForArgoCDApplicationSyncStatusAndHealth(ctx, app, &expectedSyncStatus, &expectedHealth, c); err != nil {
+		return err
 	}
 
-	actionOutput("Wait 30 seconds after enabling cluster watch, to allow application controller to enumerate resources on the cluster")
-	time.Sleep(30 * time.Second)
+	actionOutput("Wait 60 seconds after enabling cluster watch, to allow application controller to enumerate resources on the cluster")
+	time.Sleep(60 * time.Second)
 
 	return nil
 
@@ -150,7 +249,7 @@ func createClusterSecret(ctx context.Context, argoCDNamespace string, kClient cl
 	return nil
 }
 
-func setupOpenShiftGitOps(ctx context.Context, c *myClient, klog logr.Logger) error {
+func setupOpenShiftGitOps(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient, klog logr.Logger) error {
 
 	// Create the subscription if it doesn't already exist
 	if err := createSubscription(ctx, c); err != nil {
@@ -175,11 +274,7 @@ func setupOpenShiftGitOps(ctx context.Context, c *myClient, klog logr.Logger) er
 		}
 	}
 
-	// delete the old argocd cr
-	// wait for resources to be deleted
-	// create the new argocd cr
-
-	if err := recreateArgoCDCR(ctx, c); err != nil {
+	if err := recreateArgoCDCR(ctx, applicationControllerSettingsParam, c); err != nil {
 		return err
 	}
 
@@ -187,6 +282,36 @@ func setupOpenShiftGitOps(ctx context.Context, c *myClient, klog logr.Logger) er
 }
 
 func createSubscription(ctx context.Context, c *myClient) error {
+
+	actionOutput("Delete remaining ArgoCD CRs")
+	if argoCDList, err := c.argoCDClient.Namespace(ArgoCDNamespace).List(ctx, metav1.ListOptions{}); err != nil {
+		if !strings.Contains(err.Error(), "the server could not find the requested resource") {
+			return err
+		}
+
+	} else {
+		for _, argoCD := range argoCDList.Items {
+			// set deletion timestamp
+			if err := c.argoCDClient.Namespace(ArgoCDNamespace).Delete(ctx, argoCD.GetName(), metav1.DeleteOptions{}); err != nil {
+				if !apierr.IsNotFound(err) {
+					return err
+				}
+			}
+			// remove the finalizer
+			argoCDEntry, err := c.argoCDClient.Namespace(ArgoCDNamespace).Get(ctx, argoCD.GetName(), metav1.GetOptions{})
+			if err != nil {
+				if !apierr.IsNotFound(err) {
+					return err
+				}
+			}
+			argoCDEntry.SetFinalizers([]string{})
+			if _, err := c.argoCDClient.Update(ctx, &argoCD, metav1.UpdateOptions{}); err != nil {
+				if !apierr.IsNotFound(err) {
+					return err
+				}
+			}
+		}
+	}
 
 	actionOutput("Deleting OpenShift GitOps subscription")
 	if err := c.subscriptionClient.Namespace("openshift-operators").Delete(ctx, "openshift-gitops-operator", metav1.DeleteOptions{}); err != nil {
@@ -222,10 +347,16 @@ func createSubscription(ctx context.Context, c *myClient) error {
 		} else {
 			break
 		}
-
 	}
 
-	actionOutput("Creating new Argo CD subscription")
+	actionOutput("Deleting existing Argo CD Namespace")
+
+	// Delete existing Argo CD namespace
+	if err := deleteResource(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ArgoCDNamespace}}, c); err != nil {
+		return err
+	}
+
+	actionOutput("Creating new OpenShift GitOps Subscription")
 
 	subscriptionStr := `
 apiVersion: operators.coreos.com/v1alpha1
@@ -651,33 +782,44 @@ func createClient() (client.Client, error) {
 	return kClient, nil
 }
 
-func recreateArgoCDCR(ctx context.Context, c *myClient) error {
+type applicationControllerSettings struct {
+	operationProcessors     int
+	statusProcessors        int
+	kubectlParallelismLimit int
+	resourceRequirements    *corev1.ResourceRequirements
+}
 
-	actionOutput("Deleting Argo CD namespace")
+func recreateArgoCDCR(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient) error {
+
+	actionOutput("Deleting and recreating Argo CD namespace")
 	namespace := corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "argocd",
+			Name: ArgoCDNamespace,
 		},
 	}
-	if err := c.kClient.Delete(ctx, &namespace); err != nil {
-		if !apierr.IsNotFound(err) {
-			return err
-		}
-	}
-
-	actionOutput("Waiting for 'argocd' Namespace to no longer exist")
-	for {
-		namespaceGet := namespace.DeepCopy()
-		if err := c.kClient.Get(ctx, client.ObjectKeyFromObject(namespaceGet), namespaceGet); err != nil {
-			break
-		} else {
-			time.Sleep(1 * time.Second)
-		}
-	}
-
-	if err := c.kClient.Create(ctx, &namespace); err != nil {
+	if err := deleteAndCreateResource(ctx, &namespace, c); err != nil {
 		return err
 	}
+
+	// if err := c.kClient.Delete(ctx, &namespace); err != nil {
+	// 	if !apierr.IsNotFound(err) {
+	// 		return err
+	// 	}
+	// }
+
+	// actionOutput("Waiting for 'argocd' Namespace to no longer exist")
+	// for {
+	// 	namespaceGet := namespace.DeepCopy()
+	// 	if err := c.kClient.Get(ctx, client.ObjectKeyFromObject(namespaceGet), namespaceGet); err != nil {
+	// 		break
+	// 	} else {
+	// 		time.Sleep(1 * time.Second)
+	// 	}
+	// }
+
+	// if err := c.kClient.Create(ctx, &namespace); err != nil {
+	// 	return err
+	// }
 
 	// {
 
@@ -741,8 +883,8 @@ apiVersion: argoproj.io/v1beta1
 kind: ArgoCD
 metadata:
   name: argocd
-  finalizers:
-    - argoproj.io/finalizer
+#  finalizers:
+#    - argoproj.io/finalizer
 spec:
   server:
     autoscale:
@@ -857,6 +999,11 @@ spec:
       requests:
         cpu: 250m
         memory: 128Mi
+`
+
+	// TODO: add support for controlling limits/requests
+	if applicationControllerSettingsParam == nil {
+		argoCDStr += `
   controller:
     processors: {}
     resources:
@@ -866,8 +1013,22 @@ spec:
       requests:
         cpu: 250m
         memory: 250Mi
-    sharding: {}
-`
+    sharding: {}`
+	} else {
+		argoCDStr += `
+  controller:
+    processors:
+      operation: ` + fmt.Sprintf("%d", applicationControllerSettingsParam.operationProcessors) + ` 
+      status:  ` + fmt.Sprintf("%d", applicationControllerSettingsParam.statusProcessors) + ` 
+    parallelismLimit: ` + fmt.Sprintf("%d", applicationControllerSettingsParam.kubectlParallelismLimit) + `
+    resources:
+      limits:
+        cpu: '2'
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 250Mi`
+	}
 
 	if err := dynamicCreateInNamespace(ctx, argoCDStr, namespace.Name, c.argoCDClient); err != nil {
 		return err
@@ -891,6 +1052,10 @@ func waitForPodsToBeReady(ctx context.Context, namespace string, expectedContain
 		containersInReadyState := 0
 		for _, pod := range podList.Items {
 			for _, containerStatus := range pod.Status.ContainerStatuses {
+
+				if strings.Contains(containerStatus.Name, "dex") {
+					continue // skip dex
+				}
 
 				if containerStatus.Ready {
 					containersInReadyState++

@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	appv1 "github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
+	"github.com/argoproj/gitops-engine/pkg/health"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +50,7 @@ func (ledger *resourceCreationLedger) disposeAll(ctx context.Context, c *myClien
 	ledger.mutex.Lock()
 	defer ledger.mutex.Unlock()
 
+	actionOutput("Deleting test Namespaces")
 	// 1) Delete namespaces, first
 	{
 		var workToComplete []runnableTask
@@ -58,11 +64,12 @@ func (ledger *resourceCreationLedger) disposeAll(ctx context.Context, c *myClien
 				obj: obj,
 			})
 		}
-		if err := runTasks(ctx, 50, workToComplete, c); err != nil {
+		if _, err := runTasksConcurrently(ctx, 50, workToComplete, nil, c); err != nil {
 			return err
 		}
 	}
 
+	actionOutput("Deleting other test resources")
 	// 2) Delete everything else, second
 	{
 		var workToComplete []runnableTask
@@ -77,7 +84,7 @@ func (ledger *resourceCreationLedger) disposeAll(ctx context.Context, c *myClien
 			})
 
 		}
-		if err := runTasks(ctx, 50, workToComplete, c); err != nil {
+		if _, err := runTasksConcurrently(ctx, 50, workToComplete, nil, c); err != nil {
 			return err
 		}
 	}
@@ -114,7 +121,105 @@ func deleteAndCreateResource(ctx context.Context, objParam client.Object, c *myC
 
 }
 
+const (
+	ResourceUsageAnnotation = "resource-usage-resource"
+)
+
+func deleteOldAnnotatedResources(ctx context.Context, c *myClient) error {
+
+	var argocdApplicationList appv1.ApplicationList
+	if err := c.kClient.List(ctx, &argocdApplicationList); err != nil {
+		if strings.Contains(err.Error(), "no matches for kind") {
+			return nil
+		}
+		return err
+	} else {
+
+		for _, app := range argocdApplicationList.Items {
+
+			if _, exists := app.Annotations[ResourceUsageAnnotation]; exists {
+
+				if err := deleteResource(ctx, &app, c); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	var workToComplete []runnableTask
+
+	var namespaceList corev1.NamespaceList
+	if err := c.kClient.List(ctx, &namespaceList); err != nil {
+		return err
+	}
+
+	for i := range namespaceList.Items {
+		namespace := namespaceList.Items[i]
+
+		if _, exists := namespace.Annotations[ResourceUsageAnnotation]; exists {
+
+			workToComplete = append(workToComplete, &workTask_disposeOfClientObject{
+				obj: &namespace,
+			})
+
+		}
+	}
+
+	if _, err := runTasksConcurrently(ctx, 50, workToComplete, nil, c); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// func deleteOldAnnotatedResources(ctx context.Context, c *myClient) error {
+
+// 	var namespaceList corev1.NamespaceList
+// 	if err := c.kClient.List(ctx, &namespaceList); err != nil {
+// 		return err
+// 	}
+
+// 	for _, namespace := range namespaceList.Items {
+
+// 		if _, exists := namespace.Annotations[ResourceUsageAnnotation]; exists {
+
+// 			if err := deleteResource(ctx, &namespace, c); err != nil {
+// 				return err
+// 			}
+// 		}
+// 	}
+
+// 	var argocdApplicationList appv1.ApplicationList
+// 	if err := c.kClient.List(ctx, &argocdApplicationList); err != nil {
+// 		if strings.Contains(err.Error(), "no matches for kind") {
+// 			return nil
+// 		}
+// 		return err
+// 	} else {
+
+// 		for _, app := range argocdApplicationList.Items {
+
+// 			if _, exists := app.Annotations[ResourceUsageAnnotation]; exists {
+
+// 				if err := deleteResource(ctx, &app, c); err != nil {
+// 					return err
+// 				}
+// 			}
+// 		}
+
+// 	}
+
+// 	return nil
+// }
+
 func createResource(ctx context.Context, objParam client.Object, c *myClient) error {
+
+	annots := objParam.GetAnnotations()
+	if annots == nil {
+		annots = map[string]string{}
+	}
+	annots[ResourceUsageAnnotation] = "true"
+	objParam.SetAnnotations(annots)
 
 	if err := c.kClient.Create(context.Background(), objParam); err != nil {
 		return err
@@ -154,7 +259,7 @@ func actionOutput(str string) {
 }
 
 func debugActionOutput(str string) {
-	if debug {
+	if resourceUsageDebug {
 		fmt.Println("* " + str)
 	}
 }
@@ -224,10 +329,9 @@ func deleteResource(ctx context.Context, objParam client.Object, c *myClient) er
 		}
 
 		for {
-
 			if err := c.kClient.Get(ctx, client.ObjectKeyFromObject(obj), obj); err == nil {
 				time.Sleep(1000 * time.Millisecond)
-				debugActionOutput("Waiting for deletion of " + obj.GetName())
+				debugActionOutput("Waiting for deletion of " + obj.GetName() + " " + reflect.TypeOf(obj).String())
 			} else {
 				break
 			}
@@ -276,8 +380,8 @@ func runCommand(cmdList ...string) (string, string, error) {
 
 func collectBaseMemoryUsage() (int, error) {
 
-	actionOutput("Waiting to collect base memory usage")
-	time.Sleep(30 * time.Second)
+	actionOutput("Waiting 60s to collect base memory usage")
+	time.Sleep(60 * time.Second)
 
 	memoryUsage, err := getAppControllerMemoryUsage()
 	if err != nil {
@@ -287,8 +391,148 @@ func collectBaseMemoryUsage() (int, error) {
 
 }
 
+func waitForAllHealthyAndSyncedAppsAndNoOOMIncrease(ctx context.Context, c *myClient) (bool, error) {
+
+	const (
+		mustSucceedWithinXMinutes = 10
+		successOnNoOOMForXMinutes = 3
+	)
+
+	failExpireTime := time.Now().Add(time.Minute * mustSucceedWithinXMinutes)
+
+	// var lastOOMIncreaseSeen *time.Time
+
+	lastRestartCountSeen := 0
+
+	successExpireTime := time.Now().Add(time.Minute * successOnNoOOMForXMinutes)
+
+	actionOutput(fmt.Sprintf("Waiting for Argo CD Application controller to not restart for %d minutes", successOnNoOOMForXMinutes))
+	for {
+
+		if time.Now().After(failExpireTime) {
+			actionOutput(fmt.Sprintf("Application controller never stabilized. Final restart count was: %v", lastRestartCountSeen))
+			return false, nil // fail!
+		}
+
+		if time.Now().After(successExpireTime) {
+			break
+		}
+
+		applicationControllerPod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "argocd-application-controller-0", Namespace: ArgoCDNamespace}}
+
+		if err := c.kClient.Get(ctx, client.ObjectKeyFromObject(&applicationControllerPod), &applicationControllerPod); err != nil {
+			return false, err
+		}
+
+		if len(applicationControllerPod.Status.ContainerStatuses) != 1 {
+			return false, fmt.Errorf("unexpected number of container statuses")
+		}
+
+		container := applicationControllerPod.Status.ContainerStatuses[0]
+
+		// Every time the restart increases, increase the wait time
+		if container.RestartCount != int32(lastRestartCountSeen) {
+			actionOutput(fmt.Sprintf("- Restart seen in application-controller: %v", container.RestartCount))
+			lastRestartCountSeen = int(container.RestartCount)
+			// now := time.Now()
+			// lastOOMIncreaseSeen = &now
+			successExpireTime = time.Now().Add(time.Minute * successOnNoOOMForXMinutes) // reset the wait counter
+		}
+
+		time.Sleep(10 * time.Second)
+
+	}
+
+	actionOutput("Waiting for all Argo CD Application to be synced/healthy")
+	for {
+
+		if time.Now().After(failExpireTime) {
+			actionOutput("Application controller never stabilized. Argo CD Applications existed that were unhealty or out of sync")
+
+			return false, nil // fail!
+		}
+
+		var argoCDApplicationList appv1.ApplicationList
+
+		if err := c.kClient.List(ctx, &argoCDApplicationList, &client.ListOptions{Namespace: ArgoCDNamespace}); err != nil {
+			return false, err
+		}
+
+		ready := true
+		for _, app := range argoCDApplicationList.Items {
+
+			if app.Status.Sync.Status != appv1.SyncStatusCodeSynced {
+				actionOutput("- App is not synced: " + app.Name)
+				ready = false
+			}
+
+			if app.Status.Health.Status != health.HealthStatusHealthy {
+				actionOutput("- App is not healthy: " + app.Name)
+				ready = false
+			}
+
+		}
+		if ready {
+			break
+		} else {
+			time.Sleep(5 * time.Second)
+		}
+	}
+
+	return true, nil
+
+}
+
+func collectPostMemoryUsage() (int, int, int, error) {
+
+	actionOutput("Waiting 30s for controller memory usage to stabilize")
+	time.Sleep(30 * time.Second)
+
+	actionOutput("Gathering memory usage statistics for the next 3 minutes")
+	expireTime := time.Now().Add(3 * time.Minute)
+
+	var (
+		highestMemUsageSeen = 0
+		lowestMemUsageSeen  = math.MaxInt
+		valuesSeen          = []int{}
+	)
+
+	for {
+
+		if time.Now().After(expireTime) {
+			break
+		}
+
+		memoryUsage, err := getAppControllerMemoryUsage()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		if memoryUsage > highestMemUsageSeen {
+			highestMemUsageSeen = memoryUsage
+		}
+
+		if memoryUsage < lowestMemUsageSeen {
+			lowestMemUsageSeen = memoryUsage
+		}
+
+		valuesSeen = append(valuesSeen, memoryUsage)
+
+		time.Sleep(1 * time.Second)
+	}
+
+	averageMemorySeen := 0
+	for _, value := range valuesSeen {
+		averageMemorySeen += value
+	}
+	averageMemorySeen = averageMemorySeen / len(valuesSeen)
+
+	return lowestMemUsageSeen, highestMemUsageSeen, averageMemorySeen, nil
+
+}
+
 func getAppControllerMemoryUsage() (int, error) {
-	containers, err := getPodResourceUsage("argocd-application-controller-0", "argocd")
+	containers, err := getPodResourceUsage("argocd-application-controller-0", ArgoCDNamespace)
 	if err != nil {
 		return 0, err
 	}
@@ -300,5 +544,316 @@ func getAppControllerMemoryUsage() (int, error) {
 	}
 
 	return memoryInt, nil
+
+}
+
+type experimentResult struct {
+	success bool // success is true if experiment has expected result, false otherwise.
+}
+
+func waitForArgoCDApplicationSyncStatusAndHealth(ctx context.Context, app appv1.Application, expectedSyncStatus *appv1.SyncStatusCode, expectedHealthStatus *health.HealthStatusCode, c *myClient) error {
+
+	requiredConditions := 0
+
+	if expectedHealthStatus != nil {
+		requiredConditions++
+	}
+
+	if expectedSyncStatus != nil {
+		requiredConditions++
+	}
+
+	if requiredConditions == 0 {
+		return fmt.Errorf("invalid parameters")
+	}
+
+	for {
+		if err := c.kClient.Get(ctx, client.ObjectKeyFromObject(&app), &app); err != nil {
+			return err
+		}
+
+		if resourceUsageDebug {
+			fmt.Println(app.Name, app.Status.Health.Status, app.Status.Sync.Status)
+		}
+
+		conditionsMet := 0
+
+		if expectedSyncStatus != nil && app.Status.Sync.Status == *expectedSyncStatus {
+			conditionsMet++
+		}
+
+		if expectedHealthStatus != nil && app.Status.Health.Status == *expectedHealthStatus {
+			conditionsMet++
+		}
+
+		if conditionsMet == requiredConditions {
+			break
+		}
+
+		time.Sleep(1000 * time.Millisecond)
+	}
+
+	return nil
+}
+
+type experimentFunction func(ctx context.Context, myClient *myClient, oomDetected chan string, kLog logr.Logger) (*experimentResult, error)
+
+type experiment struct {
+	name                  string
+	fn                    experimentFunction
+	appControllerSettings *applicationControllerSettings
+}
+
+func beginExperiment(ctx context.Context, e experiment, myClient *myClient, kLog logr.Logger) (bool, error) {
+
+	expireTime := time.Now().Add(time.Minute * 30)
+	// cancelCancelChan, cancelChan := createChannelSignalOnTimeout(ctx, expireTime, myClient)
+
+	cancelCancelChan, cancelChan := createChannelSignalOnOOM(ctx, myClient)
+
+	fmt.Println()
+	actionOutput("Beginning experiment: " + e.name)
+	result, err := e.fn(ctx, myClient, cancelChan, kLog)
+	if err != nil {
+		return false, err
+	}
+
+	go func() {
+		cancelCancelChan <- true // TODO: Hmm
+	}()
+
+	if restartedContainer, err := lookForPodRestarts(ctx, myClient); err != nil {
+		return false, err
+	} else if restartedContainer != "" {
+		actionOutput("ERROR: Container restart detected, likely due to OOM: " + restartedContainer)
+		result.success = false
+	}
+
+	if time.Now().After(expireTime) {
+		actionOutput("FAIL: Experiment expired.")
+		result.success = false
+	}
+
+	if result.success {
+		fmt.Println("SUCCESS")
+	} else {
+		fmt.Println("FAIL")
+	}
+	actionOutput("Experiment complete")
+
+	return result.success, nil
+}
+
+func createChannelSignalOnTimeout(ctx context.Context, expireTime time.Time, c *myClient) (chan bool, chan string) {
+
+	cancelCancelChan := make(chan bool)
+	cancelChan := make(chan string)
+
+	// expireTime := time.Now().Add(time.Minute * time.Duration(expireTimeInMinutes))
+
+	go func() {
+		var expired bool
+	outer:
+		for {
+			select {
+			case <-cancelCancelChan:
+				expired = false
+				break outer
+			default:
+			}
+
+			if time.Now().After(expireTime) {
+				expired = true
+				break outer
+			}
+
+			time.Sleep(time.Second * 1)
+		}
+
+		if expired {
+			actionOutput("Signalling test expiration")
+
+			for {
+
+				// select {
+				// case <-cancelCancelChan:
+				// 	expired = false
+				// 	break outer
+				// default:
+				// }
+
+				cancelChan <- "true"
+			}
+
+		}
+
+	}()
+
+	return cancelCancelChan, cancelChan
+}
+
+func createChannelSignalOnOOM(ctx context.Context, c *myClient) (chan bool, chan string) {
+	cancelCancelChan := make(chan bool)
+	cancelChan := make(chan string)
+
+	go func() {
+		var err error
+		var restartedContainer string
+
+	outer:
+		for {
+
+			select {
+			case <-cancelCancelChan:
+				break outer
+			default:
+			}
+
+			if restartedContainer, err = lookForPodRestarts(ctx, c); err == nil && restartedContainer != "" {
+				actionOutput("ERROR: Container restart detected, likely due to OOM: " + restartedContainer)
+				break outer
+			}
+			time.Sleep(5 * time.Second)
+		}
+		for {
+			cancelChan <- restartedContainer
+		}
+	}()
+
+	return cancelCancelChan, cancelChan
+}
+
+type runnableTask interface {
+	runTask(ctx context.Context, taskNumber int, client *myClient) error
+}
+
+func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, availableWork []runnableTask, signalCancelled chan string, myClient *myClient) (bool, error) {
+
+	ctx, cancelFunc := context.WithCancel(ctx)
+
+	concurrentTasks := 0
+
+	totalWork := len(availableWork)
+
+	var mutex sync.Mutex
+
+	var nextTaskNumber int
+
+	const (
+		reportEveryXPercent = 5
+		reportEveryXSeconds = 60
+	)
+
+	nextReportTime := time.Now().Add(time.Second * reportEveryXSeconds)
+	nextPercentToReport := 100 - reportEveryXPercent
+
+	cancelSignalled := false // If cancel is signalled, then stop adding new tasks, and wait for active tasks to complete
+	for {
+
+		workAdded := false
+
+		breakOutOfForLoop := func() bool {
+			mutex.Lock()
+			defer mutex.Unlock()
+
+			{
+				report := false
+				percentRemaining := int(float32(100) * float32(len(availableWork)+concurrentTasks) / float32(totalWork))
+
+				if percentRemaining > 0 && percentRemaining <= nextPercentToReport {
+					nextPercentToReport -= reportEveryXPercent
+					report = true
+				}
+
+				if time.Now().After(nextReportTime) {
+					report = true
+				}
+
+				if report {
+					nextReportTime = time.Now().Add(time.Second * reportEveryXSeconds)
+					actionOutput(fmt.Sprintf("- Tasks remaining: %d%%, %d/%d", percentRemaining, len(availableWork)+concurrentTasks, totalWork))
+				}
+			}
+
+			if len(availableWork) == 0 && concurrentTasks == 0 {
+				return true
+			}
+
+			if concurrentTasks == 0 && cancelSignalled {
+				return true
+			}
+
+			if signalCancelled != nil {
+				select {
+				case <-signalCancelled:
+					cancelSignalled = true
+					cancelFunc()
+				default:
+				}
+			}
+
+			if concurrentTasks < maxConcurrentTasks && len(availableWork) > 0 && !cancelSignalled {
+
+				concurrentTasks++
+				localNextTaskNumber := nextTaskNumber
+				nextTaskNumber++
+
+				work := availableWork[0]
+				availableWork = availableWork[1:]
+
+				workAdded = true
+				go func(taskNumber int) {
+
+					work.runTask(ctx, taskNumber, myClient)
+
+					mutex.Lock()
+					defer mutex.Unlock()
+					concurrentTasks--
+
+				}(localNextTaskNumber)
+			}
+
+			return false
+		}()
+
+		if breakOutOfForLoop {
+			break
+		}
+
+		if !workAdded {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+	}
+
+	return cancelSignalled, nil
+
+}
+
+// lookForPodRestarts returns the name of any containers that have >0 restarts, or "" otherwise
+func lookForPodRestarts(ctx context.Context, c *myClient) (string, error) {
+
+	var podList corev1.PodList
+
+	if err := c.kClient.List(ctx, &podList, &client.ListOptions{Namespace: ArgoCDNamespace}); err != nil {
+		return "", err
+	}
+
+	for _, pod := range podList.Items {
+
+		for _, containerStatus := range pod.Status.ContainerStatuses {
+
+			if strings.Contains(containerStatus.Name, "dex") {
+				continue
+			}
+
+			if containerStatus.RestartCount > 0 {
+				return containerStatus.Name, nil
+			}
+
+		}
+	}
+
+	return "", nil
 
 }

@@ -4,17 +4,32 @@ import (
 	"context"
 	"fmt"
 	fatallog "log"
-	"sync"
-	"time"
 
 	"github.com/go-logr/logr"
-
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 var (
-	debug = false
+	resourceUsageDebug = false
 )
+
+func createResourceRequirements(cpuRequest, memoryRequest, cpuLimit, memoryLimit string) *corev1.ResourceRequirements {
+
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpuRequest),
+			corev1.ResourceMemory: resource.MustParse(memoryRequest),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpuLimit),
+			corev1.ResourceMemory: resource.MustParse(memoryLimit),
+		},
+	}
+
+	return &resources
+}
 
 func main() {
 
@@ -27,155 +42,105 @@ func main() {
 		fatallog.Fatal(err)
 	}
 
-	// TODO: Assert no change in number of OOMs
-
 	{
 
+		// resources := createResourceRequirements("250m", "250Mi", "2", "2Gi")
+
 		experimentsToRun := []experiment{
-			createExperiment_216KiBConfigMap(),
-			createExperiment_unmanagedConfigMaps(),
+
+			createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "500Mi")}),
+
+			createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "700Mi")}),
+
+			createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}),
+
+			createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "1100Mi")}),
+
+			// createExperiment_mediumApps(),
+			// createExperiment_216KiBConfigMap(),
+			// createExperiment_unmanagedConfigMaps(),
 		}
 
 		for _, experiment := range experimentsToRun {
 
 			actionOutput("------------------------------ " + experiment.name + " -------------------------------------")
 
-			actionOutput("Pre: Setup environment")
-			if err := initialConfiguration(ctx, myClient, kLog); err != nil {
+			actionOutput("Pre: Delete previous test resources")
+			if err := deleteOldAnnotatedResources(ctx, myClient); err != nil {
 				fatallog.Fatal(err)
 			}
 
-			if err := beginExperiment(ctx, experiment, myClient, kLog); err != nil {
+			actionOutput("Pre: Setup environment")
+
+			if experiment.appControllerSettings != nil {
+				actionOutput("Application Controller settings:")
+				actionOutput(fmt.Sprintf("- operationProcessors: %d", experiment.appControllerSettings.operationProcessors))
+				actionOutput(fmt.Sprintf("- statusProcessors: %d", experiment.appControllerSettings.statusProcessors))
+				actionOutput(fmt.Sprintf("- kubectlParallelismLimit: %d", experiment.appControllerSettings.kubectlParallelismLimit))
+
+				if experiment.appControllerSettings.resourceRequirements != nil {
+					actionOutput(fmt.Sprintf("- resources: %v", experiment.appControllerSettings.resourceRequirements))
+				}
+
+			} else {
+				actionOutput("Application Controller settings: default")
+			}
+
+			if err := initialConfiguration(ctx, experiment.appControllerSettings, myClient, kLog); err != nil {
 				fatallog.Fatal(err)
 			}
+
+			_, err := beginExperiment(ctx, experiment, myClient, kLog)
 
 			actionOutput("Post: Cleaning up old resources")
 			myClient.ledger.disposeAll(ctx, myClient)
 
+			if err != nil {
+				fatallog.Fatal(err)
+			}
+
+			// if !success {
+			// 	actionOutput("Exit due to failed experiment")
+			// 	os.Exit(1)
+			// }
+
 		}
 
 	}
-
-	// if err := initialConfiguration(ctx, myClient, kLog); err != nil {
-	// 	fatallog.Fatal(err)
-	// }
-
-	// if result, err := experiment_unmanagedConfigMaps(ctx, myClient, kLog); err != nil {
-	// 	fatallog.Fatal(err)
-	// } else {
-	// 	if result.success {
-	// 		fmt.Println("SUCCESS")
-	// 	} else {
-	// 		fmt.Println("FAIL")
-	// 	}
-	// }
-
-	// // if result, err := experiment_216KiBConfigMap(ctx, myClient, kLog); err != nil {
-	// // 	fatallog.Fatal(err)
-	// // } else {
-	// // 	if result.success {
-	// // 		fmt.Println("SUCCESS")
-	// // 	} else {
-	// // 		fmt.Println("FAIL")
-	// // 	}
-	// // }
-	// actionOutput("Cleaning up old resources")
-	// myClient.ledger.disposeAll(ctx, myClient)
-
-	// // if err := generateRepo("jgw", "jgw", kClient); err != nil {
-	// // 	fmt.Println(err)
-	// // 	return
-	// // }
-
 }
 
-type experiment struct {
-	name string
-	fn   func(ctx context.Context, myClient *myClient, kLog logr.Logger) (*experimentResult, error)
-}
+func runExperiment(ctx context.Context, experiment experiment, myClient *myClient, kLog logr.Logger) (bool, error) {
 
-func beginExperiment(ctx context.Context, e experiment, myClient *myClient, kLog logr.Logger) error {
-
-	fmt.Println()
-	actionOutput("Beginning experiment: " + e.name)
-	result, err := e.fn(ctx, myClient, kLog)
-	if err != nil {
-		return err
+	actionOutput("Pre: Delete previous test resources")
+	if err := deleteOldAnnotatedResources(ctx, myClient); err != nil {
+		return false, err
 	}
 
-	if result.success {
-		fmt.Println("SUCCESS")
+	actionOutput("Pre: Setup environment")
+
+	if experiment.appControllerSettings != nil {
+		actionOutput("Application Controller settings:")
+		actionOutput(fmt.Sprintf("- operationProcessors: %d", experiment.appControllerSettings.operationProcessors))
+		actionOutput(fmt.Sprintf("- statusProcessors: %d", experiment.appControllerSettings.statusProcessors))
+		actionOutput(fmt.Sprintf("- kubectlParallelismLimit: %d", experiment.appControllerSettings.kubectlParallelismLimit))
+
+		if experiment.appControllerSettings.resourceRequirements != nil {
+			actionOutput(fmt.Sprintf("- resources: %v", experiment.appControllerSettings.resourceRequirements))
+		}
+
 	} else {
-		fmt.Println("FAIL")
-	}
-	actionOutput("Experiment complete")
-	fmt.Println()
-
-	return nil
-}
-
-type runnableTask interface {
-	runTask(ctx context.Context, taskNumber int, client *myClient) error
-}
-
-func runTasks(ctx context.Context, maxConcurrentTasks int, availableWork []runnableTask, myClient *myClient) error {
-
-	concurrentTasks := 0
-
-	totalWork := len(availableWork)
-
-	var mutex sync.Mutex
-
-	var nextTaskNumber int
-
-	nextPercentToReport := 95
-
-	for {
-
-		workAdded := false
-
-		mutex.Lock()
-		{
-
-			percentRemaining := int(float32(100) * float32(len(availableWork)) / float32(totalWork))
-
-			if percentRemaining > 0 && percentRemaining <= nextPercentToReport {
-				fmt.Printf("- Tasks remaining: %v%%, %v/%v\n", percentRemaining, len(availableWork), totalWork)
-				nextPercentToReport -= 5
-			}
-
-			if len(availableWork) == 0 && concurrentTasks == 0 {
-				break
-			}
-
-			if concurrentTasks < maxConcurrentTasks && len(availableWork) > 0 {
-
-				concurrentTasks++
-				localNextTaskNumber := nextTaskNumber
-				nextTaskNumber++
-
-				work := availableWork[0]
-				availableWork = availableWork[1:]
-
-				workAdded = true
-				go func(taskNumber int) {
-
-					work.runTask(ctx, taskNumber, myClient)
-
-					mutex.Lock()
-					concurrentTasks--
-					mutex.Unlock()
-				}(localNextTaskNumber)
-			}
-		}
-		mutex.Unlock()
-
-		if !workAdded {
-			time.Sleep(100 * time.Millisecond)
-		}
-
+		actionOutput("Application Controller settings: default")
 	}
 
-	return nil
+	if err := initialConfiguration(ctx, experiment.appControllerSettings, myClient, kLog); err != nil {
+		return false, err
+	}
+
+	success, err := beginExperiment(ctx, experiment, myClient, kLog)
+
+	actionOutput("Post: Cleaning up old resources")
+	myClient.ledger.disposeAll(ctx, myClient)
+
+	return success, err
 
 }
