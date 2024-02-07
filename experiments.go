@@ -258,14 +258,15 @@ type workTask_experiment_unmanagedConfigMaps struct {
 	namespace string
 }
 
-func createExperiment_largeApps(numberOfApps int, param *applicationControllerSettings) experiment {
+func createExperiment_largeApps(numberOfApps int, param *applicationControllerSettings, runXTimes int) experiment {
 
-	fn := createExperimentFunction("apps/large-no-replicas", numberOfApps, 0 /*1300*/, 3000)
+	fn := createExperimentFunction("apps/large-no-replicas", numberOfApps, 0 /*1300*/, 99000)
 
 	return experiment{
 		name:                  fmt.Sprintf("Large apps - %d large apps", numberOfApps),
 		fn:                    fn,
 		appControllerSettings: param,
+		runXTimes:             runXTimes,
 	}
 }
 
@@ -305,7 +306,7 @@ func createExperimentFunction(repoPath string, totalTasks int, memoryUsageLowerB
 
 			actionOutput("Creating Argo CD Applications, and waiting for sync")
 			var err error
-			if cancelled, err = runTasksConcurrently(ctx, 200, availableWork, cancelSignalled, c); err != nil {
+			if cancelled, err = runTasksConcurrently(ctx, totalTasks, availableWork, cancelSignalled, c); err != nil {
 				return nil, err
 			}
 		}

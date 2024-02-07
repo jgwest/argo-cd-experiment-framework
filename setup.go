@@ -146,13 +146,13 @@ func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsPara
 
 func initialConfiguration(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient, kLog logr.Logger) error {
 
-	if err := setupKustomizeArgoCD(ctx, applicationControllerSettingsParam, c); err != nil {
-		return err
-	}
-
-	// if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c, kLog); err != nil {
+	// if err := setupKustomizeArgoCD(ctx, applicationControllerSettingsParam, c); err != nil {
 	// 	return err
 	// }
+
+	if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c, kLog); err != nil {
+		return err
+	}
 
 	if err := createClusterSecret(ctx, ArgoCDNamespace, c.kClient, kLog); err != nil {
 		return err
@@ -365,7 +365,7 @@ metadata:
   name: openshift-gitops-operator
   namespace: openshift-operators
 spec:
-  channel: gitops-1.10
+  channel: gitops-1.12
   installPlanApproval: Automatic
   name: openshift-gitops-operator
   source: redhat-operators
@@ -1036,7 +1036,7 @@ spec:
 
 	actionOutput("Waiting for Argo CD containers to start")
 
-	return waitForPodsToBeReady(ctx, namespace.Name, 6, c)
+	return waitForPodsToBeReady(ctx, namespace.Name, 5, c)
 
 }
 

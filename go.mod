@@ -1,6 +1,8 @@
 module github.com/sourceblade-cd/resource-usage
 
-go 1.19
+go 1.21
+
+toolchain go1.21.11
 
 require (
 	github.com/argoproj/argo-cd/v2 v2.0.0-20231208200105-a761a495f16d

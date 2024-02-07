@@ -18,6 +18,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierr "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -172,46 +173,6 @@ func deleteOldAnnotatedResources(ctx context.Context, c *myClient) error {
 	return nil
 }
 
-// func deleteOldAnnotatedResources(ctx context.Context, c *myClient) error {
-
-// 	var namespaceList corev1.NamespaceList
-// 	if err := c.kClient.List(ctx, &namespaceList); err != nil {
-// 		return err
-// 	}
-
-// 	for _, namespace := range namespaceList.Items {
-
-// 		if _, exists := namespace.Annotations[ResourceUsageAnnotation]; exists {
-
-// 			if err := deleteResource(ctx, &namespace, c); err != nil {
-// 				return err
-// 			}
-// 		}
-// 	}
-
-// 	var argocdApplicationList appv1.ApplicationList
-// 	if err := c.kClient.List(ctx, &argocdApplicationList); err != nil {
-// 		if strings.Contains(err.Error(), "no matches for kind") {
-// 			return nil
-// 		}
-// 		return err
-// 	} else {
-
-// 		for _, app := range argocdApplicationList.Items {
-
-// 			if _, exists := app.Annotations[ResourceUsageAnnotation]; exists {
-
-// 				if err := deleteResource(ctx, &app, c); err != nil {
-// 					return err
-// 				}
-// 			}
-// 		}
-
-// 	}
-
-// 	return nil
-// }
-
 func createResource(ctx context.Context, objParam client.Object, c *myClient) error {
 
 	annots := objParam.GetAnnotations()
@@ -221,7 +182,7 @@ func createResource(ctx context.Context, objParam client.Object, c *myClient) er
 	annots[ResourceUsageAnnotation] = "true"
 	objParam.SetAnnotations(annots)
 
-	if err := c.kClient.Create(context.Background(), objParam); err != nil {
+	if err := c.kClient.Create(ctx, objParam); err != nil {
 		return err
 	}
 	c.ledger.addObject(objParam)
@@ -602,6 +563,9 @@ type experiment struct {
 	name                  string
 	fn                    experimentFunction
 	appControllerSettings *applicationControllerSettings
+
+	// runXTimes: run the test X (e.g. 3) times, and fail (fast) if it fails at least once
+	runXTimes int
 }
 
 func beginExperiment(ctx context.Context, e experiment, myClient *myClient, kLog logr.Logger) (bool, error) {
@@ -761,7 +725,13 @@ func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, available
 				percentRemaining := int(float32(100) * float32(len(availableWork)+concurrentTasks) / float32(totalWork))
 
 				if percentRemaining > 0 && percentRemaining <= nextPercentToReport {
-					nextPercentToReport -= reportEveryXPercent
+					nextPercentToReport = percentRemaining - reportEveryXPercent
+					nextPercentToReport = nextPercentToReport - (nextPercentToReport % reportEveryXPercent)
+					if nextPercentToReport < 0 {
+						nextPercentToReport = 0
+					}
+					// nextPercentToReport = (percentRemaining - (percentRemaining % reportEveryXPercent)) - reportEveryXPercent
+					// nextPercentToReport -= reportEveryXPercent
 					report = true
 				}
 
@@ -856,4 +826,20 @@ func lookForPodRestarts(ctx context.Context, c *myClient) (string, error) {
 
 	return "", nil
 
+}
+
+func createResourceRequirements(cpuRequest, memoryRequest, cpuLimit, memoryLimit string) *corev1.ResourceRequirements {
+
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpuRequest),
+			corev1.ResourceMemory: resource.MustParse(memoryRequest),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpuLimit),
+			corev1.ResourceMemory: resource.MustParse(memoryLimit),
+		},
+	}
+
+	return &resources
 }
