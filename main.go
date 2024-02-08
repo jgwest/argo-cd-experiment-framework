@@ -13,7 +13,248 @@ var (
 	resourceUsageDebug = false
 )
 
+type parameter struct {
+	name     string
+	values   []any
+	dataType dataType
+}
+
+func generateIntegerParameterValues(start int, endInclusive int) []any {
+	var res []any
+	for ; start <= endInclusive; start++ {
+		res = append(res, start)
+	}
+	return res
+}
+
+func generateIntegerParameterValuesWithIncrement(start int, endInclusive int, increment int) []any {
+	var res []any
+	for ; start <= endInclusive; start += increment {
+		res = append(res, start)
+	}
+	return res
+}
+
+func generateAllCombos(params []parameter) [][]int {
+
+	res := [][]int{}
+
+	curr := make([]int, len(params))
+
+	for idx := range curr {
+		curr[idx] = 0
+	}
+
+	fmt.Println("start")
+
+outer:
+	for {
+
+		entry := make([]int, len(params))
+		copy(entry, curr)
+		res = append(res, entry)
+
+		curr[len(curr)-1]++
+
+		for idx := len(curr) - 1; idx >= 0; idx-- {
+
+			if curr[idx] == len(params[idx].values) {
+				curr[idx] = 0
+
+				if idx-1 < 0 {
+					break outer
+				}
+
+				curr[idx-1]++
+			}
+		}
+
+	}
+
+	return res
+
+}
+
+type paramList []parameter
+
+func (paramList paramList) findParam(name string) *parameter {
+
+	for idx := range paramList {
+		if paramList[idx].name == name {
+			return &paramList[idx]
+		}
+	}
+
+	return nil
+}
+
+type dataType int
+
+const (
+	// dataType_largerIsBetter:
+	// if 5 passes, no reason to test 2, 3, 4
+	// if 2 fails, no reason to test 3, 4, 5
+	// on fail, skip anything larger
+	// on success, skip anything smaller
+	dataType_largerIsBetter dataType = 1
+
+	// dataType_smallerIsBetter:
+	// if 500 passes, no reason to test 1000, 1500, etc
+	// if 3000 fails, no reason to test 2500, 2000, etc.
+	// on fail, skip anything smaller, mark as 'expected fail'
+	// on success, skip anything larger, mark as 'expected pass'
+	dataType_smallerIsBetter dataType = 2
+)
+
 func main() {
+
+	ctx := context.Background()
+
+	kLog := log.FromContext(ctx)
+
+	c, err := createMyClient()
+	if err != nil {
+		fatallog.Fatal(err)
+	}
+
+	parameters := paramList{{
+		name:     "processors",
+		values:   generateIntegerParameterValues(2, 5),
+		dataType: dataType_largerIsBetter,
+		// if 5 passes, no reason to test 2, 3, 4
+		// if 2 fails, no reason to test 3, 4, 5
+		// on fail, skip anything larger
+		// on success, skip anything smaller
+	}, {
+		name:     "application-controller-memory",
+		values:   generateIntegerParameterValuesWithIncrement(500, 3000, 500),
+		dataType: dataType_smallerIsBetter,
+		// if 500 passes, no reason to test 1000, 1500, etc
+		// if 3000 fails, no reason to test 2500, 2000, etc.
+		// on fail, skip anything smaller, mark as 'expected fail'
+		// on success, skip anything larger, mark as 'expected pass'
+	}}
+
+	allCombos := generateAllCombos(parameters)
+
+	combosToRun := make([][]int, len(allCombos))
+	copy(combosToRun, allCombos)
+
+	appsToTest := 30
+
+	for len(combosToRun) > 0 {
+
+		nextComboIdx := len(combosToRun) / 2
+		combo := combosToRun[nextComboIdx]
+		combosToRun = append(combosToRun[0:nextComboIdx], combosToRun[nextComboIdx+1:]...)
+
+		// for _, combo := range allCombos {
+
+		processors := (parameters.findParam("processors").values[combo[0]]).(int)
+
+		appControllerMemory := (parameters.findParam("application-controller-memory").values[combo[1]]).(int)
+
+		fmt.Println("Running:", coordinateString(combo, parameters))
+		// fmt.Println("Running processors:", processors, "appControllerMemory", appControllerMemory)
+
+		experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", appControllerMemory))}, 2)
+
+		success, err := runExperimentXTimes(ctx, experiment, c, kLog)
+
+		fmt.Println("result:", coordinateString(combo, parameters), success, err)
+
+		combosToRun = generateRunList(success, combo, combosToRun, parameters)
+
+	}
+}
+
+func coordinateString(combo []int, parameters paramList) string {
+	var resultLine string
+
+	for idx := range combo {
+		param := parameters[idx]
+		resultLine += fmt.Sprintf("%s: %v", param.name, param.values[combo[idx]])
+		resultLine += "   "
+	}
+
+	return resultLine
+
+}
+
+func generateRunList(success bool, combo []int, combosToRun [][]int, parameters paramList) [][]int {
+	var newCombosToRun [][]int
+
+	// TODO: This logic is incorrect: we can only skip in the case where all parameters are satisfied.
+
+	for idx := range combosToRun {
+
+		combosToRunEntry := combosToRun[idx]
+
+		skipEntry := false
+
+		for comboIdx := range combosToRunEntry {
+			param := parameters[comboIdx]
+
+			if success {
+
+				if param.dataType == dataType_largerIsBetter {
+					// on success, skip anything smaller
+
+					if combo[comboIdx] > combosToRunEntry[comboIdx] {
+						skipEntry = true
+					}
+
+				} else if param.dataType == dataType_smallerIsBetter {
+					// on success, skip anything larger
+
+					if combo[comboIdx] < combosToRunEntry[comboIdx] {
+						skipEntry = true
+					}
+				}
+
+			} else {
+
+				if param.dataType == dataType_largerIsBetter {
+					// on fail, skip anything larger
+
+					if combo[comboIdx] < combosToRunEntry[comboIdx] {
+						skipEntry = true
+					}
+
+				} else if param.dataType == dataType_smallerIsBetter {
+					// on fail, skip anything smaller
+
+					if combo[comboIdx] > combosToRunEntry[comboIdx] {
+						skipEntry = true
+					}
+				}
+
+			}
+
+		}
+
+		if skipEntry {
+			// report entry as skipped, either pass or fail
+
+			status := ""
+			if success {
+				status = "expected-to-pass"
+			} else {
+				status = "expected-to-fail"
+			}
+
+			fmt.Println("Skipping", coordinateString(combo, parameters), status)
+
+		} else {
+			newCombosToRun = append(newCombosToRun, combosToRunEntry)
+		}
+
+	}
+
+	return newCombosToRun
+}
+
+func main2() {
 
 	ctx := context.Background()
 
@@ -66,34 +307,6 @@ func main() {
 		for _, experiment := range experimentsToRun {
 
 			_, _ = runExperimentXTimes(ctx, experiment, c, kLog)
-
-			// 	numberOfRuns := 1
-
-			// 	if experiment.runXTimes > 0 {
-			// 		numberOfRuns = experiment.runXTimes
-			// 	}
-
-			// 	for runNumber := 0; runNumber < numberOfRuns; runNumber++ {
-
-			// 		testName := experiment.name
-
-			// 		if numberOfRuns > 1 {
-			// 			testName = fmt.Sprintf("%s (#%d of %d)", testName, runNumber+1, numberOfRuns)
-			// 		}
-
-			// 		actionOutput("------------------------------ " + testName + " -------------------------------------")
-
-			// 		success, err := runExperiment(ctx, experiment, c, kLog)
-			// 		if err != nil {
-			// 			actionOutput(fmt.Sprintf("Error occurred, ending experiment run: %v", err))
-			// 			break
-			// 		}
-
-			// 		if !success {
-			// 			actionOutput(fmt.Sprintf("Run %d failed, ending experiment run.", runNumber+1))
-			// 			break
-			// 		}
-			// 	}
 
 		}
 	}
