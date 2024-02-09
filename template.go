@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/go-logr/logr"
 )
@@ -60,11 +59,11 @@ func createExperiment_sampleTemplate() experiment {
 				highest = highest - baseMemoryUsage
 				avg = avg - baseMemoryUsage
 
-				fmt.Println("")
-				fmt.Println("Base memory usage:", baseMemoryUsage)
-				fmt.Println("Lowest memory usage (3 mins, adjusted):", lowest)
-				fmt.Println("Highest memory usage (3 mins, adjusted):", highest)
-				fmt.Println("Avg memory usage (3 mins, adjusted):", avg)
+				outputStatus("")
+				outputStatus("Base memory usage:", baseMemoryUsage)
+				outputStatus("Lowest memory usage (3 mins, adjusted):", lowest)
+				outputStatus("Highest memory usage (3 mins, adjusted):", highest)
+				outputStatus("Avg memory usage (3 mins, adjusted):", avg)
 
 				success = highest > 900 && highest <= 1300
 			}

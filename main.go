@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	fatallog "log"
+	"math/rand"
+	"time"
 
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -140,32 +142,47 @@ func main() {
 	combosToRun := make([][]int, len(allCombos))
 	copy(combosToRun, allCombos)
 
-	appsToTest := 30
+	appsToTest := 50
 
 	for len(combosToRun) > 0 {
 
-		nextComboIdx := len(combosToRun) / 2
+		outputStatus(fmt.Sprintf("Status: %d combos left to run.", len(combosToRun)))
+		outputStatus()
+
+		// nextComboIdx := len(combosToRun) / 2
+		nextComboIdx := rand.Intn(len(combosToRun))
 		combo := combosToRun[nextComboIdx]
 		combosToRun = append(combosToRun[0:nextComboIdx], combosToRun[nextComboIdx+1:]...)
-
-		// for _, combo := range allCombos {
 
 		processors := (parameters.findParam("processors").values[combo[0]]).(int)
 
 		appControllerMemory := (parameters.findParam("application-controller-memory").values[combo[1]]).(int)
 
-		fmt.Println("Running:", coordinateString(combo, parameters))
-		// fmt.Println("Running processors:", processors, "appControllerMemory", appControllerMemory)
+		outputStatus("Running:", coordinateString(combo, parameters))
 
 		experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", appControllerMemory))}, 2)
 
 		success, err := runExperimentXTimes(ctx, experiment, c, kLog)
 
-		fmt.Println("result:", coordinateString(combo, parameters), success, err)
+		outputStatus("Result:", coordinateString(combo, parameters), success, err)
 
 		combosToRun = generateRunList(success, combo, combosToRun, parameters)
 
 	}
+}
+
+func dateTimeString() string {
+	t := time.Now()
+	dateText := t.Format(time.RFC3339)
+
+	return dateText
+}
+
+func outputStatus(str ...any) {
+
+	fmt.Print(dateTimeString(), "| ")
+	fmt.Println(str...)
+
 }
 
 func coordinateString(combo []int, parameters paramList) string {
@@ -184,13 +201,13 @@ func coordinateString(combo []int, parameters paramList) string {
 func generateRunList(success bool, combo []int, combosToRun [][]int, parameters paramList) [][]int {
 	var newCombosToRun [][]int
 
-	// TODO: This logic is incorrect: we can only skip in the case where all parameters are satisfied.
-
 	for idx := range combosToRun {
 
 		combosToRunEntry := combosToRun[idx]
 
-		skipEntry := false
+		// skipEntry := false
+
+		skipCount := 0
 
 		for comboIdx := range combosToRunEntry {
 			param := parameters[comboIdx]
@@ -200,15 +217,17 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 				if param.dataType == dataType_largerIsBetter {
 					// on success, skip anything smaller
 
-					if combo[comboIdx] > combosToRunEntry[comboIdx] {
-						skipEntry = true
+					if combo[comboIdx] >= combosToRunEntry[comboIdx] {
+						// skipEntry = true
+						skipCount++
 					}
 
 				} else if param.dataType == dataType_smallerIsBetter {
 					// on success, skip anything larger
 
-					if combo[comboIdx] < combosToRunEntry[comboIdx] {
-						skipEntry = true
+					if combo[comboIdx] <= combosToRunEntry[comboIdx] {
+						// skipEntry = true
+						skipCount++
 					}
 				}
 
@@ -217,15 +236,17 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 				if param.dataType == dataType_largerIsBetter {
 					// on fail, skip anything larger
 
-					if combo[comboIdx] < combosToRunEntry[comboIdx] {
-						skipEntry = true
+					if combo[comboIdx] <= combosToRunEntry[comboIdx] {
+						// skipEntry = true
+						skipCount++
 					}
 
 				} else if param.dataType == dataType_smallerIsBetter {
 					// on fail, skip anything smaller
 
-					if combo[comboIdx] > combosToRunEntry[comboIdx] {
-						skipEntry = true
+					if combo[comboIdx] >= combosToRunEntry[comboIdx] {
+						// skipEntry = true
+						skipCount++
 					}
 				}
 
@@ -233,7 +254,7 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 
 		}
 
-		if skipEntry {
+		if skipCount == len(parameters) {
 			// report entry as skipped, either pass or fail
 
 			status := ""
@@ -243,7 +264,7 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 				status = "expected-to-fail"
 			}
 
-			fmt.Println("Skipping", coordinateString(combo, parameters), status)
+			fmt.Println("Skipping", coordinateString(combosToRunEntry, parameters), status)
 
 		} else {
 			newCombosToRun = append(newCombosToRun, combosToRunEntry)

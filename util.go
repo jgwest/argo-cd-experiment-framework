@@ -216,7 +216,7 @@ func createMyClient() (*myClient, error) {
 }
 
 func actionOutput(str string) {
-	fmt.Println("* " + str)
+	fmt.Println(dateTimeString(), "| * "+str)
 }
 
 func debugActionOutput(str string) {
