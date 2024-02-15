@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	fatallog "log"
-	"math/rand"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -121,16 +121,18 @@ func main() {
 
 	parameters := paramList{{
 		name:     "processors",
-		values:   generateIntegerParameterValues(2, 5),
+		values:   generateIntegerParameterValuesWithIncrement(2, 17, 5),
 		dataType: dataType_largerIsBetter,
+		// for example, with a data set of 2,3,4,5, representing number of application controller workers
 		// if 5 passes, no reason to test 2, 3, 4
 		// if 2 fails, no reason to test 3, 4, 5
 		// on fail, skip anything larger
 		// on success, skip anything smaller
 	}, {
 		name:     "application-controller-memory",
-		values:   generateIntegerParameterValuesWithIncrement(500, 3000, 500),
+		values:   generateIntegerParameterValuesWithIncrement(500, 5000, 500),
 		dataType: dataType_smallerIsBetter,
+		// for example, with a data set of 500, 1000, 1500, 2000, 2500, 3000, representing memory usage of application controller
 		// if 500 passes, no reason to test 1000, 1500, etc
 		// if 3000 fails, no reason to test 2500, 2000, etc.
 		// on fail, skip anything smaller, mark as 'expected fail'
@@ -142,17 +144,22 @@ func main() {
 	combosToRun := make([][]int, len(allCombos))
 	copy(combosToRun, allCombos)
 
-	appsToTest := 50
+	appsToTest := 90
 
 	for len(combosToRun) > 0 {
 
 		outputStatus(fmt.Sprintf("Status: %d combos left to run.", len(combosToRun)))
 		outputStatus()
 
-		// nextComboIdx := len(combosToRun) / 2
-		nextComboIdx := rand.Intn(len(combosToRun))
-		combo := combosToRun[nextComboIdx]
-		combosToRun = append(combosToRun[0:nextComboIdx], combosToRun[nextComboIdx+1:]...)
+		combo := findNextComboToRun(combosToRun, len(parameters))
+
+		idx, found := findComboIndexInComboList(combosToRun, combo)
+		if !found {
+			fatallog.Fatal("unable to locate next combo to run in list: this should never happen.")
+			return
+		}
+
+		combosToRun = append(combosToRun[0:idx], combosToRun[idx+1:]...)
 
 		processors := (parameters.findParam("processors").values[combo[0]]).(int)
 
@@ -160,7 +167,7 @@ func main() {
 
 		outputStatus("Running:", coordinateString(combo, parameters))
 
-		experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", appControllerMemory))}, 2)
+		experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", appControllerMemory))}, 1)
 
 		success, err := runExperimentXTimes(ctx, experiment, c, kLog)
 
@@ -169,6 +176,70 @@ func main() {
 		combosToRun = generateRunList(success, combo, combosToRun, parameters)
 
 	}
+}
+
+func sortByValCopy(combosToRun [][]int, paramToSortBy int) [][]int {
+	res := make([][]int, len(combosToRun))
+	copy(res, combosToRun)
+
+	slices.SortFunc(res, func(a, b []int) int {
+		return a[paramToSortBy] - b[paramToSortBy]
+	})
+
+	return res
+}
+
+func filterByValCopy(combosToRun [][]int, paramToFilterBy int, requiredValue int) [][]int {
+
+	res := [][]int{}
+
+	for idx := range combosToRun {
+
+		curr := combosToRun[idx]
+		if curr[paramToFilterBy] == requiredValue {
+			res = append(res, curr)
+		}
+	}
+
+	return res
+
+}
+
+func findComboIndexInComboList(combosToRun [][]int, comboToFind []int) (int, bool) {
+
+outer:
+	for idx := range combosToRun {
+		currCombo := combosToRun[idx]
+
+		for currComboIdx := range currCombo {
+
+			if currCombo[currComboIdx] != comboToFind[currComboIdx] {
+				continue outer
+			}
+
+		}
+		return idx, true
+
+	}
+
+	return -1, false
+}
+
+func findNextComboToRun(combosToRun [][]int, paramListSize int) []int {
+
+	candidateCombosToRun := make([][]int, len(combosToRun))
+	copy(candidateCombosToRun, combosToRun)
+
+	for x := 0; x < paramListSize; x++ {
+
+		candidateCombosToRun = sortByValCopy(candidateCombosToRun, x)
+
+		middleValueForParam := candidateCombosToRun[len(candidateCombosToRun)/2]
+
+		candidateCombosToRun = filterByValCopy(candidateCombosToRun, x, middleValueForParam[x])
+	}
+
+	return candidateCombosToRun[0]
 }
 
 func dateTimeString() string {
@@ -180,7 +251,7 @@ func dateTimeString() string {
 
 func outputStatus(str ...any) {
 
-	fmt.Print(dateTimeString(), "| ")
+	fmt.Print(dateTimeString(), " | ")
 	fmt.Println(str...)
 
 }
@@ -205,8 +276,6 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 
 		combosToRunEntry := combosToRun[idx]
 
-		// skipEntry := false
-
 		skipCount := 0
 
 		for comboIdx := range combosToRunEntry {
@@ -218,7 +287,6 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 					// on success, skip anything smaller
 
 					if combo[comboIdx] >= combosToRunEntry[comboIdx] {
-						// skipEntry = true
 						skipCount++
 					}
 
@@ -226,7 +294,6 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 					// on success, skip anything larger
 
 					if combo[comboIdx] <= combosToRunEntry[comboIdx] {
-						// skipEntry = true
 						skipCount++
 					}
 				}
@@ -237,7 +304,6 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 					// on fail, skip anything larger
 
 					if combo[comboIdx] <= combosToRunEntry[comboIdx] {
-						// skipEntry = true
 						skipCount++
 					}
 
@@ -245,7 +311,6 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 					// on fail, skip anything smaller
 
 					if combo[comboIdx] >= combosToRunEntry[comboIdx] {
-						// skipEntry = true
 						skipCount++
 					}
 				}

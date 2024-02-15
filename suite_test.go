@@ -174,3 +174,62 @@ var _ = Describe("generateRunList tests", func() {
 		),
 	)
 })
+
+var _ = Describe("sort and filter tests", func() {
+
+	DescribeTable("sortByValCopy should sort across multiple parameters", func(combosToRun [][]int, paramToSortBy int, expected [][]int) {
+		res := sortByValCopy(combosToRun, paramToSortBy)
+		Expect(res).To(Equal(expected))
+	},
+		Entry("sort by second field",
+			[][]int{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}},
+			1,
+			[][]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}, {1, 2}},
+		),
+		Entry("sort by first field",
+			[][]int{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}},
+			0,
+			[][]int{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}}))
+
+	DescribeTable("filterByValCopy should only return values that match the given parameter with the given value", func(combosToRun [][]int, paramToFilterBy int, requiredValue int, expectedRes [][]int) {
+
+		res := filterByValCopy(combosToRun, paramToFilterBy, requiredValue)
+		Expect(res).To(Equal(expectedRes))
+
+	},
+		Entry("filter by first param: value is 1",
+			[][]int{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}},
+			0,
+			1,
+			[][]int{{1, 0}, {1, 1}, {1, 2}}),
+		Entry("filter by second param: value is 2",
+			[][]int{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}},
+			1,
+			2,
+			[][]int{{0, 2}, {1, 2}}),
+	)
+
+})
+
+var _ = Describe("findNextComboToRun tests", func() {
+
+	DescribeTable("findNextComboToRun should return the median value for each parameter type", func(combosToRun [][]int, paramListSize int, expectedResult []int) {
+
+		res := findNextComboToRun(combosToRun, paramListSize)
+		Expect(res).To(Equal(expectedResult))
+
+	},
+		Entry("in a balanced list, should return exact middle for each param",
+			[][]int{{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}},
+			2,
+			[]int{1, 1}),
+		Entry("in an unbalanced list, should still return exact middle",
+			[][]int{{5, 0}, {5, 0}, {5, 8}, {5, 8}, {6, 100}, {7, 100}},
+			2,
+			[]int{5, 8}),
+		Entry("should work for a single multi-param entry",
+			[][]int{{5, 0}},
+			2,
+			[]int{5, 0}),
+	)
+})

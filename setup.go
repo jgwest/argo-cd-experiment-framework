@@ -1023,11 +1023,11 @@ spec:
     parallelismLimit: ` + fmt.Sprintf("%d", applicationControllerSettingsParam.kubectlParallelismLimit) + `
     resources:
       limits:
-        cpu: '2'
-        memory: 2Gi
+        cpu: ` + applicationControllerSettingsParam.resourceRequirements.Limits.Cpu().String() + `
+        memory: ` + applicationControllerSettingsParam.resourceRequirements.Limits.Memory().String() + `
       requests:
-        cpu: 250m
-        memory: 250Mi`
+        cpu: ` + applicationControllerSettingsParam.resourceRequirements.Requests.Cpu().String() + `
+        memory: ` + applicationControllerSettingsParam.resourceRequirements.Requests.Memory().String()
 	}
 
 	if err := dynamicCreateInNamespace(ctx, argoCDStr, namespace.Name, c.argoCDClient); err != nil {
@@ -1053,6 +1053,7 @@ func waitForPodsToBeReady(ctx context.Context, namespace string, expectedContain
 		for _, pod := range podList.Items {
 			for _, containerStatus := range pod.Status.ContainerStatuses {
 
+				// When running some versions of upstream Argo CD manifests on OpenShift, dex will perm fail to start, so we just ignore it (since these tests don't use dex).
 				if strings.Contains(containerStatus.Name, "dex") {
 					continue // skip dex
 				}

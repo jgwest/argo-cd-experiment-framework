@@ -813,14 +813,31 @@ func lookForPodRestarts(ctx context.Context, c *myClient) (string, error) {
 
 		for _, containerStatus := range pod.Status.ContainerStatuses {
 
-			if strings.Contains(containerStatus.Name, "dex") {
+			if strings.Contains(containerStatus.Name, "dex") { // When running some versions of upstream Argo CD manifests on OpenShift, dex will perm fail to start, so we just ignore it (since these tests don't use dex).
 				continue
 			}
 
 			if containerStatus.RestartCount > 0 {
+
+				oomKilled := false
+				if containerStatus.LastTerminationState.Terminated != nil && containerStatus.LastTerminationState.Terminated.Reason == "OOMKilled" {
+					oomKilled = true
+				}
+
+				if !oomKilled {
+
+					outputStatus("ERROR: container restart was detected, but OOMKilled was not found. Possible the container was restarted for another reason?")
+
+					podYaml, err := yaml.Marshal(pod)
+					if err != nil {
+						fmt.Println("on restart, unable to unmarshal pod yaml", err)
+					} else {
+						fmt.Println("on restart:", string(podYaml))
+					}
+				}
+
 				return containerStatus.Name, nil
 			}
-
 		}
 	}
 
