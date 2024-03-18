@@ -13,7 +13,7 @@ import (
 )
 
 func createExperiment_216KiBConfigMap() experiment {
-	fn := func(ctx context.Context, myClient *myClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
+	fn := func(ctx context.Context, myClient *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
 
 		totalTasks := 250
 
@@ -95,7 +95,7 @@ type workTask_experiment216KiBConfigMap struct {
 	deleteOnly bool
 }
 
-func (wt *workTask_experiment216KiBConfigMap) runTask(ctx context.Context, taskNumber int, c *myClient) error {
+func (wt *workTask_experiment216KiBConfigMap) runTask(ctx context.Context, taskNumber int, c *experimentClient) error {
 
 	namespace := corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -164,7 +164,7 @@ func (wt *workTask_experiment216KiBConfigMap) runTask(ctx context.Context, taskN
 // application-controller memory usage should only (significantly) increase while watching resources it has deployed.
 func createExperiment_unmanagedConfigMaps() experiment {
 
-	fn := func(ctx context.Context, c *myClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
+	fn := func(ctx context.Context, c *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
 
 		var cmNamespace corev1.Namespace
 		{
@@ -230,7 +230,7 @@ func createExperiment_unmanagedConfigMaps() experiment {
 	}
 }
 
-func (wt *workTask_experiment_unmanagedConfigMaps) runTask(ctx context.Context, taskNumber int, c *myClient) error {
+func (wt *workTask_experiment_unmanagedConfigMaps) runTask(ctx context.Context, taskNumber int, c *experimentClient) error {
 
 	dataMap := map[string]string{}
 
@@ -287,7 +287,7 @@ func createExperimentFunction(repoPath string, totalTasks int, memoryUsageLowerB
 	// experiment name
 	// total tasks
 	// expected memory usage range
-	fn := func(ctx context.Context, c *myClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
+	fn := func(ctx context.Context, c *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
 
 		baseMemoryUsage, err := collectBaseMemoryUsage()
 		if err != nil {
@@ -374,7 +374,7 @@ type workTask_experimentLargeApps struct {
 	deleteOnly bool
 }
 
-func (wt *workTask_experimentLargeApps) runTask(ctx context.Context, taskNumber int, c *myClient) error {
+func (wt *workTask_experimentLargeApps) runTask(ctx context.Context, taskNumber int, c *experimentClient) error {
 
 	namespace := corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{

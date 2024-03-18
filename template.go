@@ -7,7 +7,7 @@ import (
 )
 
 func createExperiment_sampleTemplate() experiment {
-	fn := func(ctx context.Context, myClient *myClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
+	fn := func(ctx context.Context, myClient *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
 
 		baseMemoryUsage, err := collectBaseMemoryUsage()
 		if err != nil {
@@ -91,7 +91,7 @@ var _ runnableTask = &workTask_experimentSampleTemplate{}
 type workTask_experimentSampleTemplate struct {
 }
 
-func (wt *workTask_experimentSampleTemplate) runTask(ctx context.Context, taskNumber int, c *myClient) error {
+func (wt *workTask_experimentSampleTemplate) runTask(ctx context.Context, taskNumber int, c *experimentClient) error {
 
 	return nil
 }

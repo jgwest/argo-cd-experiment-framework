@@ -27,7 +27,7 @@ import (
 	yaml "sigs.k8s.io/yaml"
 )
 
-type myClient struct {
+type experimentClient struct {
 	ledger             *resourceCreationLedger
 	kClient            client.Client
 	argoCDClient       dynamic.NamespaceableResourceInterface
@@ -47,7 +47,7 @@ func (ledger *resourceCreationLedger) addObject(obj client.Object) {
 	ledger.resourcesCreated = append(ledger.resourcesCreated, obj)
 }
 
-func (ledger *resourceCreationLedger) disposeAll(ctx context.Context, c *myClient) error {
+func (ledger *resourceCreationLedger) disposeAll(ctx context.Context, c *experimentClient) error {
 	ledger.mutex.Lock()
 	defer ledger.mutex.Unlock()
 
@@ -101,7 +101,7 @@ type workTask_disposeOfClientObject struct {
 	obj client.Object
 }
 
-func (wt *workTask_disposeOfClientObject) runTask(ctx context.Context, taskNumber int, c *myClient) error {
+func (wt *workTask_disposeOfClientObject) runTask(ctx context.Context, taskNumber int, c *experimentClient) error {
 	if err := deleteResource(ctx, wt.obj, c); err != nil {
 		if !apierr.IsNotFound(err) {
 			return err
@@ -110,7 +110,7 @@ func (wt *workTask_disposeOfClientObject) runTask(ctx context.Context, taskNumbe
 	return nil
 }
 
-func deleteAndCreateResource(ctx context.Context, objParam client.Object, c *myClient) error {
+func deleteAndCreateResource(ctx context.Context, objParam client.Object, c *experimentClient) error {
 
 	obj := (objParam.DeepCopyObject()).(client.Object)
 
@@ -126,7 +126,7 @@ const (
 	ResourceUsageAnnotation = "resource-usage-resource"
 )
 
-func deleteOldAnnotatedResources(ctx context.Context, c *myClient) error {
+func deleteOldAnnotatedResources(ctx context.Context, c *experimentClient) error {
 
 	var argocdApplicationList appv1.ApplicationList
 	if err := c.kClient.List(ctx, &argocdApplicationList); err != nil {
@@ -173,7 +173,7 @@ func deleteOldAnnotatedResources(ctx context.Context, c *myClient) error {
 	return nil
 }
 
-func createResource(ctx context.Context, objParam client.Object, c *myClient) error {
+func createResource(ctx context.Context, objParam client.Object, c *experimentClient) error {
 
 	annots := objParam.GetAnnotations()
 	if annots == nil {
@@ -190,7 +190,7 @@ func createResource(ctx context.Context, objParam client.Object, c *myClient) er
 	return nil
 }
 
-func createMyClient() (*myClient, error) {
+func createMyClient() (*experimentClient, error) {
 	restConfig, err := generateRestConfig()
 	if err != nil {
 		return nil, err
@@ -206,7 +206,7 @@ func createMyClient() (*myClient, error) {
 		return nil, err
 	}
 
-	return &myClient{
+	return &experimentClient{
 		ledger:             &resourceCreationLedger{},
 		kClient:            kClient,
 		argoCDClient:       dynamicClient.Resource(schema.GroupVersionResource{Group: "argoproj.io", Version: "v1beta1", Resource: "argocds"}),
@@ -272,7 +272,7 @@ func dynamicCreateInNamespace(ctx context.Context, yamlVal string, namespace str
 
 }
 
-func deleteResource(ctx context.Context, objParam client.Object, c *myClient) error {
+func deleteResource(ctx context.Context, objParam client.Object, c *experimentClient) error {
 
 	obj := (objParam.DeepCopyObject()).(client.Object)
 
@@ -313,7 +313,7 @@ func randomString(n int) string {
 	return string(s)
 }
 
-func print(obj client.Object) {
+func printObject(obj client.Object) {
 
 	bytes, err := yaml.Marshal(obj)
 	if err != nil {
@@ -352,7 +352,7 @@ func collectBaseMemoryUsage() (int, error) {
 
 }
 
-func waitForAllHealthyAndSyncedAppsAndNoOOMIncrease(ctx context.Context, c *myClient) (bool, error) {
+func waitForAllHealthyAndSyncedAppsAndNoOOMIncrease(ctx context.Context, c *experimentClient) (bool, error) {
 
 	const (
 		mustSucceedWithinXMinutes = 10
@@ -360,8 +360,6 @@ func waitForAllHealthyAndSyncedAppsAndNoOOMIncrease(ctx context.Context, c *myCl
 	)
 
 	failExpireTime := time.Now().Add(time.Minute * mustSucceedWithinXMinutes)
-
-	// var lastOOMIncreaseSeen *time.Time
 
 	lastRestartCountSeen := 0
 
@@ -512,7 +510,7 @@ type experimentResult struct {
 	success bool // success is true if experiment has expected result, false otherwise.
 }
 
-func waitForArgoCDApplicationSyncStatusAndHealth(ctx context.Context, app appv1.Application, expectedSyncStatus *appv1.SyncStatusCode, expectedHealthStatus *health.HealthStatusCode, c *myClient) error {
+func waitForArgoCDApplicationSyncStatusAndHealth(ctx context.Context, app appv1.Application, expectedSyncStatus *appv1.SyncStatusCode, expectedHealthStatus *health.HealthStatusCode, c *experimentClient) error {
 
 	requiredConditions := 0
 
@@ -557,7 +555,7 @@ func waitForArgoCDApplicationSyncStatusAndHealth(ctx context.Context, app appv1.
 	return nil
 }
 
-type experimentFunction func(ctx context.Context, myClient *myClient, oomDetected chan string, kLog logr.Logger) (*experimentResult, error)
+type experimentFunction func(ctx context.Context, myClient *experimentClient, oomDetected chan string, kLog logr.Logger) (*experimentResult, error)
 
 type experiment struct {
 	name                  string
@@ -568,7 +566,7 @@ type experiment struct {
 	runXTimes int
 }
 
-func beginExperiment(ctx context.Context, e experiment, myClient *myClient, kLog logr.Logger) (bool, error) {
+func beginExperiment(ctx context.Context, e experiment, myClient *experimentClient, kLog logr.Logger) (bool, error) {
 
 	expireTime := time.Now().Add(time.Minute * 30)
 	// cancelCancelChan, cancelChan := createChannelSignalOnTimeout(ctx, expireTime, myClient)
@@ -599,16 +597,16 @@ func beginExperiment(ctx context.Context, e experiment, myClient *myClient, kLog
 	}
 
 	if result.success {
-		fmt.Println("SUCCESS")
+		outputStatus("SUCCESS")
 	} else {
-		fmt.Println("FAIL")
+		outputStatus("FAIL")
 	}
 	actionOutput("Experiment complete")
 
 	return result.success, nil
 }
 
-func createChannelSignalOnTimeout(ctx context.Context, expireTime time.Time, c *myClient) (chan bool, chan string) {
+func createChannelSignalOnTimeout(expireTime time.Time) (chan bool, chan string) {
 
 	cancelCancelChan := make(chan bool)
 	cancelChan := make(chan string)
@@ -656,7 +654,7 @@ func createChannelSignalOnTimeout(ctx context.Context, expireTime time.Time, c *
 	return cancelCancelChan, cancelChan
 }
 
-func createChannelSignalOnOOM(ctx context.Context, c *myClient) (chan bool, chan string) {
+func createChannelSignalOnOOM(ctx context.Context, c *experimentClient) (chan bool, chan string) {
 	cancelCancelChan := make(chan bool)
 	cancelChan := make(chan string)
 
@@ -688,10 +686,10 @@ func createChannelSignalOnOOM(ctx context.Context, c *myClient) (chan bool, chan
 }
 
 type runnableTask interface {
-	runTask(ctx context.Context, taskNumber int, client *myClient) error
+	runTask(ctx context.Context, taskNumber int, client *experimentClient) error
 }
 
-func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, availableWork []runnableTask, signalCancelled chan string, myClient *myClient) (bool, error) {
+func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, availableWork []runnableTask, signalCancelled chan string, myClient *experimentClient) (bool, error) {
 
 	ctx, cancelFunc := context.WithCancel(ctx)
 
@@ -801,7 +799,7 @@ func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, available
 }
 
 // lookForPodRestarts returns the name of any containers that have >0 restarts, or "" otherwise
-func lookForPodRestarts(ctx context.Context, c *myClient) (string, error) {
+func lookForPodRestarts(ctx context.Context, c *experimentClient) (string, error) {
 
 	var podList corev1.PodList
 
@@ -828,12 +826,14 @@ func lookForPodRestarts(ctx context.Context, c *myClient) (string, error) {
 
 					outputStatus("ERROR: container restart was detected, but OOMKilled was not found. Possible the container was restarted for another reason?")
 
-					podYaml, err := yaml.Marshal(pod)
-					if err != nil {
-						fmt.Println("on restart, unable to unmarshal pod yaml", err)
-					} else {
-						fmt.Println("on restart:", string(podYaml))
-					}
+					printObject(&pod)
+
+					// podYaml, err := yaml.Marshal(pod)
+					// if err != nil {
+					// 	fmt.Println("on restart, unable to unmarshal pod yaml", err)
+					// } else {
+					// 	fmt.Println("on restart:", string(podYaml))
+					// }
 				}
 
 				return containerStatus.Name, nil

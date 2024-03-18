@@ -48,7 +48,7 @@ var (
 	}
 )
 
-func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient) error {
+func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient) error {
 
 	actionOutput("Deleting and recreating Argo CD namespace")
 	namespace := corev1.Namespace{
@@ -66,12 +66,6 @@ func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsPara
 	if err != nil {
 		return err
 	}
-
-	// execPath, err := os.Executable()
-	// if err != nil {
-	// 	return err
-	// }
-	// execFolder := filepath.Dir(execPath)
 
 	stdout, stderr, err := runCommand("kubectl", "apply", "-k", "https://github.com/argoproj/argo-cd/manifests/crds?ref=v2.9.3")
 	if err != nil {
@@ -144,13 +138,13 @@ func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsPara
 
 }
 
-func initialConfiguration(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient, kLog logr.Logger) error {
+func initialConfiguration(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient, kLog logr.Logger) error {
 
 	// if err := setupKustomizeArgoCD(ctx, applicationControllerSettingsParam, c); err != nil {
 	// 	return err
 	// }
 
-	if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c, kLog); err != nil {
+	if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c); err != nil {
 		return err
 	}
 
@@ -228,7 +222,7 @@ func createClusterSecret(ctx context.Context, argoCDNamespace string, kClient cl
 		return err
 	}
 
-	secret, err := generateClusterSecret(ctx, apiServerURL, token, false, "", argoCDNamespace)
+	secret, err := generateClusterSecret(apiServerURL, token, false, "", argoCDNamespace)
 	if err != nil {
 		return err
 	}
@@ -249,7 +243,7 @@ func createClusterSecret(ctx context.Context, argoCDNamespace string, kClient cl
 	return nil
 }
 
-func setupOpenShiftGitOps(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient, klog logr.Logger) error {
+func setupOpenShiftGitOps(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient) error {
 
 	// Create the subscription if it doesn't already exist
 	if err := createSubscription(ctx, c); err != nil {
@@ -281,7 +275,7 @@ func setupOpenShiftGitOps(ctx context.Context, applicationControllerSettingsPara
 	return nil
 }
 
-func createSubscription(ctx context.Context, c *myClient) error {
+func createSubscription(ctx context.Context, c *experimentClient) error {
 
 	actionOutput("Delete remaining ArgoCD CRs")
 	if argoCDList, err := c.argoCDClient.Namespace(ArgoCDNamespace).List(ctx, metav1.ListOptions{}); err != nil {
@@ -614,7 +608,7 @@ func createOrUpdateClusterRoleAndRoleBinding(ctx context.Context, uuid string, k
 	return nil
 }
 
-func generateClusterSecret(ctx context.Context, clusterCredentialsHost string, bearerToken string, clusterResources bool, clusterNamespaces string, argoCDNamespace string) (corev1.Secret, error) {
+func generateClusterSecret(clusterCredentialsHost string, bearerToken string, clusterResources bool, clusterNamespaces string, argoCDNamespace string) (corev1.Secret, error) {
 
 	name := "argo-cd-secret"
 	insecureVerifyTLS := true
@@ -789,7 +783,7 @@ type applicationControllerSettings struct {
 	resourceRequirements    *corev1.ResourceRequirements
 }
 
-func recreateArgoCDCR(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *myClient) error {
+func recreateArgoCDCR(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient) error {
 
 	actionOutput("Deleting and recreating Argo CD namespace")
 	namespace := corev1.Namespace{
@@ -1040,7 +1034,7 @@ spec:
 
 }
 
-func waitForPodsToBeReady(ctx context.Context, namespace string, expectedContainers int, c *myClient) error {
+func waitForPodsToBeReady(ctx context.Context, namespace string, expectedContainers int, c *experimentClient) error {
 	for {
 
 		var podList corev1.PodList

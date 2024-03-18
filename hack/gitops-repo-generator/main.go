@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -15,9 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	yaml "sigs.k8s.io/yaml"
-
-	// networkingv1 "k8s.io/api/networking/v1"
-	// rbacv1 "k8s.io/api/rbac/v1"
 
 	fatallog "log"
 )
@@ -222,65 +218,6 @@ resources:
 	return nil
 }
 
-func meow(kClient client.Client) error {
-
-	var configMapList corev1.ConfigMapList
-
-	if err := kClient.List(context.Background(), &configMapList, &client.ListOptions{Namespace: "jgw"}); err != nil {
-		return err
-	}
-
-	{
-
-		path := "/home/jgw/workspace/sourceblade/resource-usage/jgw"
-		files, err := ioutil.ReadDir(path)
-		if err != nil {
-			return err
-		}
-
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
-
-			bytes, err := os.ReadFile(filepath.Join(path, file.Name()))
-			if err != nil {
-				return err
-			}
-
-			str := strings.ReplaceAll(string(bytes), "namespace: jgw", "")
-
-			if err := os.WriteFile(filepath.Join(path, file.Name()), []byte(str), 0600); err != nil {
-				return err
-			}
-
-			// fmt.Println(file.Name(), file.IsDir())
-		}
-	}
-
-	for _, configMap := range configMapList.Items {
-
-		if !strings.Contains(configMap.Name, "jgw") {
-			continue
-		}
-
-		// fmt.Println("kubectl get configmap/" + configMap.Name + " -o yaml > " + configMap.Name + ".yaml")
-	}
-
-	// for y := 0; y < 50; y++ {
-
-	// 	name := fmt.Sprintf("jgw-%v", strings.ToLower(RandomString(32)))
-
-	// 	if err := generateRepo(name, "jgw", kClient); err != nil {
-	// 		fmt.Println(err)
-	// 		return
-	// 	}
-
-	// }
-
-	return nil
-}
-
 func generateRepo(name string, namespace string, kClient client.Client) error {
 
 	// depl := createDeployment()
@@ -296,7 +233,6 @@ func generateRepo(name string, namespace string, kClient client.Client) error {
 
 	return nil
 
-	// I can just tell argo cd to watch the cluster, then create the objects on it?
 }
 
 func createDeployment() appsv1.Deployment {
@@ -324,12 +260,7 @@ func createDeployment() appsv1.Deployment {
 							Args: []string{
 								"arg",
 							},
-							Env: []corev1.EnvVar{
-								// {
-								// 	Name:  "env1",
-								// 	Value: "val1",
-								// },
-							},
+							Env: []corev1.EnvVar{},
 						},
 					},
 				},
@@ -421,17 +352,6 @@ func createSecret() corev1.Secret {
 	}
 
 	return secret
-}
-
-func MarshallObj(obj client.Object) string {
-
-	bytes, err := yaml.Marshal(&obj)
-	if err != nil {
-		panic("unable to marshal obj")
-	}
-
-	return string(bytes)
-
 }
 
 func randomString(n int) string {

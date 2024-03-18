@@ -30,7 +30,7 @@ var _ = Describe("generateRunList tests", func() {
 		}
 		Expect(combosToRun).To(HaveLen(expectedComboLen))
 
-		res := generateRunList(success, combo, combosToRun, parameters)
+		res := generateRunList(success, combo, combosToRun, parameters, &resultsList{})
 
 		Expect(res).To(Equal(expectedRes))
 
@@ -83,7 +83,7 @@ var _ = Describe("generateRunList tests", func() {
 		}
 		Expect(combosToRun).To(HaveLen(expectedComboLen))
 
-		res := generateRunList(success, combo, combosToRun, parameters)
+		res := generateRunList(success, combo, combosToRun, parameters, &resultsList{})
 
 		Expect(res).To(Equal(expectedRes))
 
