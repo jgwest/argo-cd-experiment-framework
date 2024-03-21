@@ -190,7 +190,7 @@ func createResource(ctx context.Context, objParam client.Object, c *experimentCl
 	return nil
 }
 
-func createMyClient() (*experimentClient, error) {
+func createExperimentClient() (*experimentClient, error) {
 	restConfig, err := generateRestConfig()
 	if err != nil {
 		return nil, err
@@ -555,7 +555,7 @@ func waitForArgoCDApplicationSyncStatusAndHealth(ctx context.Context, app appv1.
 	return nil
 }
 
-type experimentFunction func(ctx context.Context, myClient *experimentClient, oomDetected chan string, kLog logr.Logger) (*experimentResult, error)
+type experimentFunction func(ctx context.Context, expClient *experimentClient, oomDetected chan string, kLog logr.Logger) (*experimentResult, error)
 
 type experiment struct {
 	name                  string
@@ -566,16 +566,16 @@ type experiment struct {
 	runXTimes int
 }
 
-func beginExperiment(ctx context.Context, e experiment, myClient *experimentClient, kLog logr.Logger) (bool, error) {
+func beginExperiment(ctx context.Context, e experiment, expClient *experimentClient, kLog logr.Logger) (bool, error) {
 
 	expireTime := time.Now().Add(time.Minute * 30)
-	// cancelCancelChan, cancelChan := createChannelSignalOnTimeout(ctx, expireTime, myClient)
+	// cancelCancelChan, cancelChan := createChannelSignalOnTimeout(ctx, expireTime, expClient)
 
-	cancelCancelChan, cancelChan := createChannelSignalOnOOM(ctx, myClient)
+	cancelCancelChan, cancelChan := createChannelSignalOnOOM(ctx, expClient)
 
 	fmt.Println()
 	actionOutput("Beginning experiment: " + e.name)
-	result, err := e.fn(ctx, myClient, cancelChan, kLog)
+	result, err := e.fn(ctx, expClient, cancelChan, kLog)
 	if err != nil {
 		return false, err
 	}
@@ -584,7 +584,7 @@ func beginExperiment(ctx context.Context, e experiment, myClient *experimentClie
 		cancelCancelChan <- true // TODO: Hmm
 	}()
 
-	if restartedContainer, err := lookForPodRestarts(ctx, myClient); err != nil {
+	if restartedContainer, err := lookForPodRestarts(ctx, expClient); err != nil {
 		return false, err
 	} else if restartedContainer != "" {
 		actionOutput("ERROR: Container restart detected, likely due to OOM: " + restartedContainer)
@@ -655,7 +655,11 @@ func createChannelSignalOnTimeout(expireTime time.Time) (chan bool, chan string)
 }
 
 func createChannelSignalOnOOM(ctx context.Context, c *experimentClient) (chan bool, chan string) {
+
+	// Sending a message to cancelCancelChan will terminate the cancel thread
 	cancelCancelChan := make(chan bool)
+
+	// createChannelSignalOnOOM will send a string (the name of the container that restarted) to cancelChan, when a pod restart is detected.
 	cancelChan := make(chan string)
 
 	go func() {
@@ -665,6 +669,7 @@ func createChannelSignalOnOOM(ctx context.Context, c *experimentClient) (chan bo
 	outer:
 		for {
 
+			// When a value is received on 'cancelCancelChan', then exist.
 			select {
 			case <-cancelCancelChan:
 				break outer
@@ -689,7 +694,7 @@ type runnableTask interface {
 	runTask(ctx context.Context, taskNumber int, client *experimentClient) error
 }
 
-func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, availableWork []runnableTask, signalCancelled chan string, myClient *experimentClient) (bool, error) {
+func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, availableWork []runnableTask, signalCancelled chan string, expClient *experimentClient) (bool, error) {
 
 	ctx, cancelFunc := context.WithCancel(ctx)
 
@@ -772,7 +777,7 @@ func runTasksConcurrently(ctx context.Context, maxConcurrentTasks int, available
 				workAdded = true
 				go func(taskNumber int) {
 
-					work.runTask(ctx, taskNumber, myClient)
+					work.runTask(ctx, taskNumber, expClient)
 
 					mutex.Lock()
 					defer mutex.Unlock()

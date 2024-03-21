@@ -7,7 +7,7 @@ import (
 )
 
 func createExperiment_sampleTemplate() experiment {
-	fn := func(ctx context.Context, myClient *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
+	fn := func(ctx context.Context, expClient *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
 
 		baseMemoryUsage, err := collectBaseMemoryUsage()
 		if err != nil {
@@ -24,7 +24,7 @@ func createExperiment_sampleTemplate() experiment {
 			}
 
 			actionOutput("...")
-			if _, err := runTasksConcurrently(ctx, 30, availableWork, nil, myClient); err != nil {
+			if _, err := runTasksConcurrently(ctx, 30, availableWork, nil, expClient); err != nil {
 				return err
 			}
 
@@ -40,7 +40,7 @@ func createExperiment_sampleTemplate() experiment {
 
 			actionOutput("...")
 			var err error
-			if cancelled, err = runTasksConcurrently(ctx, 5, availableWork, cancelSignalled, myClient); err != nil {
+			if cancelled, err = runTasksConcurrently(ctx, 5, availableWork, cancelSignalled, expClient); err != nil {
 				return nil, err
 			}
 		}

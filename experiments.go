@@ -13,7 +13,7 @@ import (
 )
 
 func createExperiment_216KiBConfigMap() experiment {
-	fn := func(ctx context.Context, myClient *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
+	fn := func(ctx context.Context, expClient *experimentClient, cancelSignalled chan string, kLog logr.Logger) (*experimentResult, error) {
 
 		totalTasks := 250
 
@@ -33,7 +33,7 @@ func createExperiment_216KiBConfigMap() experiment {
 
 			actionOutput("creating ConfigMap Applications")
 			var err error
-			if cancelled, err = runTasksConcurrently(ctx, 5, availableWork, cancelSignalled, myClient); err != nil {
+			if cancelled, err = runTasksConcurrently(ctx, 5, availableWork, cancelSignalled, expClient); err != nil {
 				return nil, err
 			}
 		}
@@ -72,7 +72,7 @@ func createExperiment_216KiBConfigMap() experiment {
 				})
 			}
 
-			if _, err := runTasksConcurrently(ctx, 30, availableWork, nil, myClient); err != nil {
+			if _, err := runTasksConcurrently(ctx, 30, availableWork, nil, expClient); err != nil {
 				return nil, err
 			}
 
@@ -258,15 +258,15 @@ type workTask_experiment_unmanagedConfigMaps struct {
 	namespace string
 }
 
-func createExperiment_largeApps(numberOfApps int, param *applicationControllerSettings, runXTimes int) experiment {
+func createExperiment_largeApps(params experimentExecutionParams) experiment {
 
-	fn := createExperimentFunction("apps/large-no-replicas", numberOfApps, 0 /*1300*/, 99000)
+	fn := createExperimentFunction("apps/large-no-replicas", params.appsToTest, 0 /*1300*/, 99000)
 
 	return experiment{
-		name:                  fmt.Sprintf("Large apps - %d large apps", numberOfApps),
+		name:                  fmt.Sprintf("Large apps - %d large apps", params.appsToTest),
 		fn:                    fn,
-		appControllerSettings: param,
-		runXTimes:             runXTimes,
+		appControllerSettings: &params.appControllerSettings,
+		runXTimes:             params.runXTimes,
 	}
 }
 

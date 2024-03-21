@@ -35,17 +35,39 @@ const (
 
 func main() {
 
+	// parameters := paramList{{
+	// 	name:     "processors",
+	// 	values:   generateIntegerParameterValuesWithIncrement(2, 17, 5),
+	// 	dataType: dataType_largerIsBetter,
+	// }, {
+	// 	name:     "application-controller-memory",
+	// 	values:   generateIntegerParameterValuesWithIncrement(1500, 4500, 500),
+	// 	dataType: dataType_smallerIsBetter,
+	// }}
+
 	parameters := paramList{{
-		name:     "processors",
-		values:   generateIntegerParameterValuesWithIncrement(2, 17, 5),
+		name:     "applications",
+		values:   generateIntegerParameterValuesWithIncrement(40, 120, 20),
 		dataType: dataType_largerIsBetter,
+		applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+			paramsToModify.appsToTest = val
+		},
 	}, {
 		name:     "application-controller-memory",
-		values:   generateIntegerParameterValuesWithIncrement(1500, 4500, 500),
+		values:   generateIntegerParameterValuesWithIncrement(1000, 5000, 500),
 		dataType: dataType_smallerIsBetter,
+		applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+			paramsToModify.appControllerSettings.resourceRequirements = createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", val))
+		},
 	}}
 
 	runWithParameters(parameters)
+}
+
+type experimentExecutionParams struct {
+	appsToTest            int
+	appControllerSettings applicationControllerSettings
+	runXTimes             int
 }
 
 func runWithParameters(parameters paramList) {
@@ -53,7 +75,7 @@ func runWithParameters(parameters paramList) {
 
 	kLog := log.FromContext(ctx)
 
-	c, err := createMyClient()
+	c, err := createExperimentClient()
 	if err != nil {
 		fatallog.Fatal(err)
 	}
@@ -65,7 +87,10 @@ func runWithParameters(parameters paramList) {
 	combosToRun := make([][]int, len(allCombos))
 	copy(combosToRun, allCombos)
 
-	appsToTest := 90
+	defaultAppsToTest := 100
+	defaultProcessors := 10
+	defaultAppControllerMemLimit := 1000
+	defaultRunXTimes := 1
 
 	for len(combosToRun) > 0 {
 
@@ -82,13 +107,28 @@ func runWithParameters(parameters paramList) {
 
 		combosToRun = append(combosToRun[0:idx], combosToRun[idx+1:]...)
 
-		processors := (parameters.findParam("processors").values[combo[0]]).(int)
+		// processors := (parameters.findParam("processors").values[combo[0]]).(int)
 
-		appControllerMemory := (parameters.findParam("application-controller-memory").values[combo[1]]).(int)
+		// appControllerMemory := (parameters.findParam("application-controller-memory").values[combo[1]]).(int)
 
 		outputStatus("Running:", coordinateString(combo, parameters))
 
-		experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", appControllerMemory))}, 1)
+		expParams := experimentExecutionParams{
+			appsToTest:            defaultAppsToTest,
+			appControllerSettings: applicationControllerSettings{operationProcessors: defaultProcessors, statusProcessors: defaultProcessors, kubectlParallelismLimit: defaultProcessors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", defaultAppControllerMemLimit))},
+			runXTimes:             defaultRunXTimes,
+		}
+
+		for paramIndex := range parameters {
+			currParam := parameters[paramIndex]
+
+			valueToSet := currParam.values[combo[paramIndex]]
+
+			fmt.Println("[hi] set "+currParam.name+" to", valueToSet)
+			currParam.applyValueFn((valueToSet).(int), &expParams)
+		}
+
+		experiment := createExperiment_largeApps(expParams)
 
 		success, err := runExperimentXTimes(ctx, experiment, c, kLog)
 
@@ -344,7 +384,7 @@ func main2() {
 
 	kLog := log.FromContext(ctx)
 
-	c, err := createMyClient()
+	c, err := createExperimentClient()
 	if err != nil {
 		fatallog.Fatal(err)
 	}
@@ -357,31 +397,9 @@ func main2() {
 
 	{
 
-		// resources := createResourceRequirements("250m", "250Mi", "2", "2Gi")
-
 		experimentsToRun := []experiment{
 
 			// createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "500Mi")}, 3),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 2, statusProcessors: 2, kubectlParallelismLimit: 2, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "500Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 3, statusProcessors: 3, kubectlParallelismLimit: 3, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 3, statusProcessors: 3, kubectlParallelismLimit: 4, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 3, statusProcessors: 3, kubectlParallelismLimit: 6, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 3, statusProcessors: 3, kubectlParallelismLimit: 8, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 3, statusProcessors: 3, kubectlParallelismLimit: 10, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 3, statusProcessors: 3, kubectlParallelismLimit: 3, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "700Mi")}, 2),
-
-			// createExperiment_largeApps(10, &applicationControllerSettings{operationProcessors: 4, statusProcessors: 4, kubectlParallelismLimit: 4, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "700Mi")}, 2),
-
-			// createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "900Mi")}, 3),
-
-			// createExperiment_largeApps(20, &applicationControllerSettings{operationProcessors: 5, statusProcessors: 5, kubectlParallelismLimit: 5, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", "1100Mi")}, 3),
 
 			// createExperiment_mediumApps(),
 			// createExperiment_216KiBConfigMap(),
@@ -429,10 +447,10 @@ func runExperimentXTimes(ctx context.Context, experiment experiment, c *experime
 
 }
 
-func runExperiment(ctx context.Context, experiment experiment, myClient *experimentClient, kLog logr.Logger) (bool, error) {
+func runExperiment(ctx context.Context, experiment experiment, expClient *experimentClient, kLog logr.Logger) (bool, error) {
 
 	actionOutput("Pre: Delete previous test resources")
-	if err := deleteOldAnnotatedResources(ctx, myClient); err != nil {
+	if err := deleteOldAnnotatedResources(ctx, expClient); err != nil {
 		return false, err
 	}
 
@@ -452,14 +470,14 @@ func runExperiment(ctx context.Context, experiment experiment, myClient *experim
 		actionOutput("Application Controller settings: default")
 	}
 
-	if err := initialConfiguration(ctx, experiment.appControllerSettings, myClient, kLog); err != nil {
+	if err := initialConfiguration(ctx, argoCDInstallType_OpenShift, experiment.appControllerSettings, expClient, kLog); err != nil {
 		return false, err
 	}
 
-	success, err := beginExperiment(ctx, experiment, myClient, kLog)
+	success, err := beginExperiment(ctx, experiment, expClient, kLog)
 
 	actionOutput("Post: Cleaning up old resources")
-	myClient.ledger.disposeAll(ctx, myClient)
+	expClient.ledger.disposeAll(ctx, expClient)
 
 	return success, err
 
@@ -477,7 +495,13 @@ func findMemoryValue(ctx context.Context, appsToTest int, c *experimentClient, k
 		currVal := startVal
 		for {
 
-			experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", currVal))}, 2)
+			expParams := experimentExecutionParams{
+				appsToTest:            appsToTest,
+				appControllerSettings: applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", currVal))},
+				runXTimes:             2,
+			}
+
+			experiment := createExperiment_largeApps(expParams)
 
 			success, err := runExperimentXTimes(ctx, experiment, c, kLog)
 			if err != nil {
@@ -502,7 +526,13 @@ func findMemoryValue(ctx context.Context, appsToTest int, c *experimentClient, k
 
 	for x := startVal; x <= firstSuccess; x += 100 {
 
-		experiment := createExperiment_largeApps(appsToTest, &applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", x))}, 2)
+		expParams := experimentExecutionParams{
+			appsToTest:            appsToTest,
+			appControllerSettings: applicationControllerSettings{operationProcessors: processors, statusProcessors: processors, kubectlParallelismLimit: processors, resourceRequirements: createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", x))},
+			runXTimes:             2,
+		}
+
+		experiment := createExperiment_largeApps(expParams)
 
 		allValuesToTest = append(allValuesToTest, experiment)
 	}
@@ -541,9 +571,10 @@ func findMemoryValue(ctx context.Context, appsToTest int, c *experimentClient, k
 }
 
 type parameter struct {
-	name     string
-	values   []any
-	dataType dataType
+	name         string
+	values       []any
+	dataType     dataType
+	applyValueFn func(val int, paramsToModify *experimentExecutionParams)
 }
 
 func generateIntegerParameterValues(start int, endInclusive int) []any {

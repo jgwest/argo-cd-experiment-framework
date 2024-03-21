@@ -38,6 +38,13 @@ const (
 	ArgoCDManagerClusterRoleBindingNamePrefix = "argocd-manager-cluster-role-binding-"
 )
 
+type argoCDInstallType string
+
+const (
+	argoCDInstallType_OpenShift       argoCDInstallType = "openshift"
+	argoCDInstallType_ArgoCDKustomize argoCDInstallType = "argo-cd-kustomize"
+)
+
 var (
 	ArgoCDManagerNamespacePolicyRules = []rbacv1.PolicyRule{
 		{
@@ -138,14 +145,19 @@ func setupKustomizeArgoCD(ctx context.Context, applicationControllerSettingsPara
 
 }
 
-func initialConfiguration(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient, kLog logr.Logger) error {
+func initialConfiguration(ctx context.Context, installType argoCDInstallType, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient, kLog logr.Logger) error {
 
-	// if err := setupKustomizeArgoCD(ctx, applicationControllerSettingsParam, c); err != nil {
-	// 	return err
-	// }
+	if installType == argoCDInstallType_ArgoCDKustomize {
+		if err := setupKustomizeArgoCD(ctx, applicationControllerSettingsParam, c); err != nil {
+			return err
+		}
+	} else if installType == argoCDInstallType_OpenShift {
+		if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c); err != nil {
+			return err
+		}
 
-	if err := setupOpenShiftGitOps(ctx, applicationControllerSettingsParam, c); err != nil {
-		return err
+	} else {
+		return fmt.Errorf("unrecognized install type: %s", installType)
 	}
 
 	if err := createClusterSecret(ctx, ArgoCDNamespace, c.kClient, kLog); err != nil {
@@ -166,11 +178,6 @@ func initialConfiguration(ctx context.Context, applicationControllerSettingsPara
 			Source: &appv1.ApplicationSource{
 				RepoURL: "https://github.com/jgwest/repo-template",
 				Path:    "apps/single/",
-
-				// RepoURL:        "https://github.com/managed-gitops-test-data/deployment-permutations-a",
-				// Path:           "pathC",
-				// TargetRevision: "branchB",
-
 			},
 			Destination: appv1.ApplicationDestination{
 				Name:      "argo-cd-secret",
