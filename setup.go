@@ -314,7 +314,7 @@ func createSubscription(ctx context.Context, c *experimentClient) error {
 		}
 	}
 
-	actionOutput("Deleting OpenShift GitOps subscription")
+	actionOutput("Deleting OpenShift GitOps Subscription")
 	if err := c.subscriptionClient.Namespace("openshift-operators").Delete(ctx, "openshift-gitops-operator", metav1.DeleteOptions{}); err != nil {
 		if !apierr.IsNotFound(err) {
 			return err
@@ -322,17 +322,42 @@ func createSubscription(ctx context.Context, c *experimentClient) error {
 
 	}
 
-	actionOutput("Deleting OpenShift GitOps CSVs")
-	csvList, err := c.csvClient.Namespace("openshift-operators").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return err
-	}
-	for _, csv := range csvList.Items {
-		if strings.Contains(csv.GetName(), "gitops-operator") {
-			if err := c.csvClient.Namespace("openshift-operators").Delete(ctx, csv.GetName(), metav1.DeleteOptions{}); err != nil {
-				return err
+	for {
+
+		actionOutput("Deleting OpenShift GitOps CSVs")
+		csvList, err := c.csvClient.Namespace("openshift-operators").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return err
+		}
+		for _, csv := range csvList.Items {
+			fmt.Println("deleting CSV", csv.GetName())
+			if strings.Contains(csv.GetName(), "gitops-operator") {
+				if err := c.csvClient.Namespace("openshift-operators").Delete(ctx, csv.GetName(), metav1.DeleteOptions{}); err != nil {
+					return err
+				}
 			}
 		}
+
+		actionOutput("Deleting OpenShift GitOps InstallPlans")
+		ipList, err := c.ipClient.Namespace("openshift-operators").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return err
+		}
+		for _, ip := range ipList.Items {
+			fmt.Println("deleting installplan", ip.GetName())
+			if strings.Contains(ip.GetName(), "gitops") {
+				if err := c.ipClient.Namespace("openshift-operators").Delete(ctx, ip.GetName(), metav1.DeleteOptions{}); err != nil {
+					return err
+				}
+			}
+		}
+
+		if len(csvList.Items) == 0 && len(ipList.Items) == 0 {
+			break
+		} else {
+			time.Sleep(5 * time.Second)
+		}
+
 	}
 
 	actionOutput("Waiting for pods to no longer exist in openshift-operators namespace")
@@ -380,7 +405,7 @@ spec:
 	if err := yaml.Unmarshal([]byte(subscriptionStr), &res); err != nil {
 		return err
 	}
-	_, err = c.subscriptionClient.Namespace("openshift-operators").Create(ctx, &unstructured.Unstructured{
+	_, err := c.subscriptionClient.Namespace("openshift-operators").Create(ctx, &unstructured.Unstructured{
 		Object: res,
 	}, metav1.CreateOptions{})
 	if err != nil {
@@ -788,6 +813,8 @@ type applicationControllerSettings struct {
 	statusProcessors        int
 	kubectlParallelismLimit int
 	resourceRequirements    *corev1.ResourceRequirements
+	workqueueBucketSize     int // TODO: Only OpenShift GitOps install supports this at the moment, only because I'm not yet adding env vars to Argo-based install
+	workqueueBucketQPS      int // TODO: Only OpenShift GitOps install supports this at the moment
 }
 
 func recreateArgoCDCR(ctx context.Context, applicationControllerSettingsParam *applicationControllerSettings, c *experimentClient) error {
@@ -1002,7 +1029,6 @@ spec:
         memory: 128Mi
 `
 
-	// TODO: add support for controlling limits/requests
 	if applicationControllerSettingsParam == nil {
 		argoCDStr += `
   controller:
@@ -1029,6 +1055,27 @@ spec:
       requests:
         cpu: ` + applicationControllerSettingsParam.resourceRequirements.Requests.Cpu().String() + `
         memory: ` + applicationControllerSettingsParam.resourceRequirements.Requests.Memory().String()
+	}
+
+	if applicationControllerSettingsParam.workqueueBucketQPS != 0 || applicationControllerSettingsParam.workqueueBucketSize != 0 {
+
+		argoCDStr += `
+    env:`
+
+		if applicationControllerSettingsParam.workqueueBucketQPS != 0 {
+			argoCDStr += `
+	  - name: WORKQUEUE_BUCKET_QPS
+	    value: ` + fmt.Sprintf("%d", applicationControllerSettingsParam.workqueueBucketQPS)
+
+		}
+
+		if applicationControllerSettingsParam.workqueueBucketSize != 0 {
+			argoCDStr += `
+	  - name: WORKQUEUE_BUCKET_SIZE
+	    value: ` + fmt.Sprintf("%d", applicationControllerSettingsParam.workqueueBucketSize)
+
+		}
+
 	}
 
 	if err := dynamicCreateInNamespace(ctx, argoCDStr, namespace.Name, c.argoCDClient); err != nil {

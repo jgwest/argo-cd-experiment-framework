@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -35,31 +37,74 @@ const (
 
 func main() {
 
-	// parameters := paramList{{
-	// 	name:     "processors",
-	// 	values:   generateIntegerParameterValuesWithIncrement(2, 17, 5),
-	// 	dataType: dataType_largerIsBetter,
-	// }, {
-	// 	name:     "application-controller-memory",
-	// 	values:   generateIntegerParameterValuesWithIncrement(1500, 4500, 500),
-	// 	dataType: dataType_smallerIsBetter,
-	// }}
-
-	parameters := paramList{{
-		name:     "applications",
-		values:   generateIntegerParameterValuesWithIncrement(40, 120, 20),
-		dataType: dataType_largerIsBetter,
-		applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
-			paramsToModify.appsToTest = val
+	parameters := paramList{
+		// {
+		// 	name:     "applications",
+		// 	values:   generateIntegerParameterValuesWithIncrement(40, 120, 20),
+		// 	dataType: dataType_largerIsBetter,
+		// 	applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+		// 		paramsToModify.appsToTest = val
+		// 	},
+		// },
+		{
+			name:     "application-controller-memory",
+			values:   generateIntegerParameterValuesWithIncrement(1000, 5000, 500),
+			dataType: dataType_smallerIsBetter,
+			applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+				paramsToModify.appControllerSettings.resourceRequirements.Limits[corev1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", val))
+			},
 		},
-	}, {
-		name:     "application-controller-memory",
-		values:   generateIntegerParameterValuesWithIncrement(1000, 5000, 500),
-		dataType: dataType_smallerIsBetter,
-		applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
-			paramsToModify.appControllerSettings.resourceRequirements = createResourceRequirements("250m", "250Mi", "2", fmt.Sprintf("%dMi", val))
+		{
+			name:     "workqueue_bucket_size", // Argo CD defaults to 500
+			values:   generateIntegerParameterValuesWithIncrement(10, 200, 20),
+			dataType: dataType_largerIsBetter,
+			applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+				paramsToModify.appControllerSettings.workqueueBucketSize = val
+			},
 		},
-	}}
+		// {
+		// 	name:     "workqueue_bucket_qps", // Argo CD defaults to unlimited (max float64)
+		// 	values:   generateIntegerParameterValuesWithIncrement(10, 100, 20),
+		// 	dataType: dataType_largerIsBetter,
+		// 	applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+		// 		paramsToModify.appControllerSettings.workqueueBucketQPS = val
+		// 	},
+		// },
+		// {
+		// 	name:     "processors-combined",
+		// 	values:   generateIntegerParameterValuesWithIncrement(2, 17, 5),
+		// 	dataType: dataType_largerIsBetter,
+		// 	applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+		// 		paramsToModify.appControllerSettings.operationProcessors = val
+		// 		paramsToModify.appControllerSettings.statusProcessors = val
+		// 		paramsToModify.appControllerSettings.kubectlParallelismLimit = val
+		// 	},
+		// },
+		// {
+		// 	name:     "operation-processors",
+		// 	values:   generateIntegerParameterValuesWithIncrement(7, 13, 2),
+		// 	dataType: dataType_largerIsBetter,
+		// 	applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+		// 		paramsToModify.appControllerSettings.operationProcessors = val
+		// 	},
+		// },
+		// {
+		// 	name:     "status-processors",
+		// 	values:   generateIntegerParameterValuesWithIncrement(15, 30, 5),
+		// 	dataType: dataType_largerIsBetter,
+		// 	applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+		// 		paramsToModify.appControllerSettings.statusProcessors = val
+		// 	},
+		// },
+		// {
+		// 	name:     "kubectl-parallelism",
+		// 	values:   generateIntegerParameterValuesWithIncrement(10, 28, 3),
+		// 	dataType: dataType_largerIsBetter,
+		// 	applyValueFn: func(val int, paramsToModify *experimentExecutionParams) {
+		// 		paramsToModify.appControllerSettings.kubectlParallelismLimit = val
+		// 	},
+		// },
+	}
 
 	runWithParameters(parameters)
 }
@@ -87,9 +132,9 @@ func runWithParameters(parameters paramList) {
 	combosToRun := make([][]int, len(allCombos))
 	copy(combosToRun, allCombos)
 
-	defaultAppsToTest := 100
+	defaultAppsToTest := 80
 	defaultProcessors := 10
-	defaultAppControllerMemLimit := 1000
+	defaultAppControllerMemLimit := 3000
 	defaultRunXTimes := 1
 
 	for len(combosToRun) > 0 {
@@ -107,10 +152,6 @@ func runWithParameters(parameters paramList) {
 
 		combosToRun = append(combosToRun[0:idx], combosToRun[idx+1:]...)
 
-		// processors := (parameters.findParam("processors").values[combo[0]]).(int)
-
-		// appControllerMemory := (parameters.findParam("application-controller-memory").values[combo[1]]).(int)
-
 		outputStatus("Running:", coordinateString(combo, parameters))
 
 		expParams := experimentExecutionParams{
@@ -124,7 +165,6 @@ func runWithParameters(parameters paramList) {
 
 			valueToSet := currParam.values[combo[paramIndex]]
 
-			fmt.Println("[hi] set "+currParam.name+" to", valueToSet)
 			currParam.applyValueFn((valueToSet).(int), &expParams)
 		}
 
@@ -133,15 +173,16 @@ func runWithParameters(parameters paramList) {
 		success, err := runExperimentXTimes(ctx, experiment, c, kLog)
 
 		{
-			statusName := "passed"
+			var experimentStatusVal experimentStatus
+			experimentStatusVal = experimentStatus_Passed
 			if !success {
-				statusName = "failed" // TODO: Convert to constants
+				experimentStatusVal = experimentStatus_Failed
 			}
 			results.addResult(resultEntry{
 				combo:   combo,
 				success: success,
 				err:     err,
-				status:  statusName,
+				status:  experimentStatusVal,
 			})
 
 		}
@@ -173,7 +214,7 @@ func generate2DMarkdownTable(parameters paramList, results resultsList) {
 		x := resultEntry.combo[0]
 		y := resultEntry.combo[1]
 
-		cells[x+1][y+1] = coordinateString(resultEntry.combo, parameters) + "/" + resultEntry.status
+		cells[x+1][y+1] = coordinateString(resultEntry.combo, parameters) + "/" + (string)(resultEntry.status)
 	}
 
 	// Add x header
@@ -353,11 +394,11 @@ func generateRunList(success bool, combo []int, combosToRun [][]int, parameters 
 		if skipCount == len(parameters) {
 			// report entry as skipped, either pass or fail
 
-			status := ""
+			var status experimentStatus
 			if success {
-				status = "expected-to-pass" // TODO: convert to constants
+				status = experimentStatus_expectedToPass
 			} else {
-				status = "expected-to-fail"
+				status = experimentStatus_expectedToFail
 			}
 
 			results.addResult(resultEntry{
@@ -652,7 +693,7 @@ type resultEntry struct {
 	combo   []int
 	success bool
 	err     error
-	status  string
+	status  experimentStatus
 	values  map[string]any
 }
 
@@ -663,3 +704,12 @@ type resultsList struct {
 func (r *resultsList) addResult(entry resultEntry) {
 	r.entries = append(r.entries, entry)
 }
+
+type experimentStatus string
+
+const (
+	experimentStatus_Passed         experimentStatus = "passed"
+	experimentStatus_Failed         experimentStatus = "failed"
+	experimentStatus_expectedToPass experimentStatus = "expected-to-pass"
+	experimentStatus_expectedToFail experimentStatus = "expected-to-fail"
+)

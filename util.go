@@ -33,6 +33,7 @@ type experimentClient struct {
 	argoCDClient       dynamic.NamespaceableResourceInterface
 	subscriptionClient dynamic.NamespaceableResourceInterface
 	csvClient          dynamic.NamespaceableResourceInterface
+	ipClient           dynamic.NamespaceableResourceInterface
 }
 
 type resourceCreationLedger struct {
@@ -212,6 +213,7 @@ func createExperimentClient() (*experimentClient, error) {
 		argoCDClient:       dynamicClient.Resource(schema.GroupVersionResource{Group: "argoproj.io", Version: "v1beta1", Resource: "argocds"}),
 		subscriptionClient: dynamicClient.Resource(schema.GroupVersionResource{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "subscriptions"}),
 		csvClient:          dynamicClient.Resource(schema.GroupVersionResource{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "clusterserviceversions"}),
+		ipClient:           dynamicClient.Resource(schema.GroupVersionResource{Group: "operators.coreos.com", Version: "v1alpha1", Resource: "installplans"}),
 	}, nil
 }
 
